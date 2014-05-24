@@ -28,7 +28,6 @@ public class OnSendClickListener implements OnClickListener {
 
 	@Override
 	public void onClick(View arg0) {
-		// TODO Auto-generated method stub
 		String msg = editText.getText().toString() + "\n";
 		editText.setText(""); 
 		new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, msg, myport);

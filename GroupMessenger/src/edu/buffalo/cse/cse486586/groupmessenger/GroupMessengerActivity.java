@@ -31,10 +31,8 @@ import java.util.Date;
 import java.util.TreeMap;
 
 /**
- * GroupMessengerActivity is the main Activity for the assignment.
- * 
- * @author stevko
- *
+ * GroupMessengerActivity 
+ * @author pratik
  */
 public class GroupMessengerActivity extends Activity {
 
@@ -66,7 +64,7 @@ public class GroupMessengerActivity extends Activity {
 		TelephonyManager tel = (TelephonyManager) this.getSystemService(Context.TELEPHONY_SERVICE);
 		String portStr = tel.getLine1Number().substring(tel.getLine1Number().length() - 4);
 		final String myPort = String.valueOf((Integer.parseInt(portStr) * 2));
-		//	   
+		
 		//Creating server socket
 		try {
 
@@ -77,34 +75,22 @@ public class GroupMessengerActivity extends Activity {
 			return;
 		}
 
-		/*
-		 * TODO: Use the TextView to display your messages. Though there is no grading component
-		 * on how you display the messages, if you implement it, it'll make your debugging easier.
-		 */
+		
 		TextView tv = (TextView) findViewById(R.id.textView1);
 		tv.setMovementMethod(new ScrollingMovementMethod());
 
-		/*
-		 * Registers OnPTestClickListener for "button1" in the layout, which is the "PTest" button.
-		 * OnPTestClickListener demonstrates how to access a ContentProvider.
-		 */
-		//added by me
 		final EditText editText = (EditText) findViewById(R.id.editText1);
 
-		// added by me
+		
 		findViewById(R.id.button1).setOnClickListener(
 				new OnPTestClickListener(tv, getContentResolver()));
 
-		/*
-		 * TODO: You need to register and implement an OnClickListener for the "Send" button.
-		 * In your implementation you need to get the message from the input box (EditText)
-		 * and send it to other AVDs in a total-causal order.
-		 */
-		//added by me
+		
+		
 		findViewById(R.id.button4).setOnClickListener(
 				new OnSendClickListener(editText,myPort));
 
-		//added by me
+		
 
 	}
 	private class ServerTask extends AsyncTask<ServerSocket, String, Void> {
@@ -114,7 +100,7 @@ public class GroupMessengerActivity extends Activity {
 			ServerSocket serverSocket = sockets[0];
 			Socket soc=new Socket();
 			/*
-			 * TODO: Fill in your server code that receives messages and passes them
+			 * Server code that receives messages and passes them
 			 * to onProgressUpdate().
 			 */
 			String msg=new String();
@@ -133,7 +119,6 @@ public class GroupMessengerActivity extends Activity {
 
 
 			} catch (IOException e) {
-				// TODO Auto-generated catch block
 				Log.e(TAG,"Reading or Publishing failed ");
 			}
 			finally
@@ -142,7 +127,6 @@ public class GroupMessengerActivity extends Activity {
 					soc.close();               // closing the socket
 					serverSocket.close();      //closing the server socket 
 				} catch (IOException e) {
-					// TODO Auto-generated catch block
 					Log.e(TAG,"Socket closing failed");
 				}
 
@@ -161,7 +145,6 @@ public class GroupMessengerActivity extends Activity {
 			try {
 				order(strReceived);
 			} catch (ParseException e) {
-				// TODO Auto-generated catch block
 				e.printStackTrace();
 			}
 

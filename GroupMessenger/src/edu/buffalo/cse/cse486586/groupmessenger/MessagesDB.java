@@ -2,6 +2,11 @@ package edu.buffalo.cse.cse486586.groupmessenger;
 
 import android.database.sqlite.SQLiteDatabase;
 import android.util.Log;
+
+/**
+ * GroupMessengerActivity 
+ * @author pratik
+ */
   
 public class MessagesDB {
   
