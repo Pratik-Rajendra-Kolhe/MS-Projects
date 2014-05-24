@@ -26,7 +26,10 @@ import android.database.MatrixCursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.net.Uri;
 import android.telephony.TelephonyManager;
-
+/**
+ *  
+ * @author pratik
+ */
 public class SimpleDynamoProvider extends ContentProvider {
 
 	DBhelper dbHelper ;
@@ -121,10 +124,6 @@ public class SimpleDynamoProvider extends ContentProvider {
 	@SuppressLint("InlinedApi")
 	@Override
 	public Uri insert(Uri uri, ContentValues values) {
-		//waiting to recover
-//				while(!isRecovered){
-//					
-//				}
 
 
 		try {
@@ -252,10 +251,6 @@ public class SimpleDynamoProvider extends ContentProvider {
 	synchronized public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs,
 			String sortOrder) {
 
-//		waiting to recover
-//				while(!isRecovered){
-//					
-//				}
 
 		resultCursor=new MatrixCursor(new String[] {KEY_FIELD, VALUE_FIELD});
 
@@ -315,7 +310,6 @@ public class SimpleDynamoProvider extends ContentProvider {
 				s.sendMsg();
 
 				while(!isQueried){
-					//System.out.println("waiting for query..");
 				}
 				isQueried=false;
 				return resultCursor;
@@ -347,10 +341,8 @@ public class SimpleDynamoProvider extends ContentProvider {
 					Sender s=new Sender(msg);
 					s.sendMsg();
 					while(!isQueried){
-						//System.out.println("waiting for query..");
 					}
 					isQueried=false;
-					//System.out.println(resultCursor.getCount()+":"+msg.key+" : quried");
 
 					return resultCursor;
 				}
@@ -374,7 +366,6 @@ public class SimpleDynamoProvider extends ContentProvider {
 
 	@Override
 	public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
-		// TODO Auto-generated method stub
 		return 0;
 	}
 

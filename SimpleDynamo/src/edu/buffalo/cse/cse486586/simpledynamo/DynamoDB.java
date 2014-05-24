@@ -2,6 +2,10 @@ package edu.buffalo.cse.cse486586.simpledynamo;
 
 import android.database.sqlite.SQLiteDatabase;
 import android.util.Log;
+/**
+ *  
+ * @author pratik
+ */
   
 public class DynamoDB {
   

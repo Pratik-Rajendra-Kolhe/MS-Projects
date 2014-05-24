@@ -5,6 +5,10 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketAddress;
 
+/**
+ *  
+ * @author pratik
+ */
 public class Sender extends Thread{
 
 	Message msg;

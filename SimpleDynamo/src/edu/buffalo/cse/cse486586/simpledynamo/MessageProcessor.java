@@ -10,6 +10,11 @@ import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.net.Uri;
 
+/**
+ *  
+ * @author pratik
+ */
+
 public class MessageProcessor {
 
 	public static final String AUTHORITY = "edu.buffalo.cse.cse486586.simpledynamo.provider"; 

@@ -14,6 +14,10 @@ import android.text.method.ScrollingMovementMethod;
 import android.view.Menu;
 import android.widget.TextView;
 
+/**
+ *  
+ * @author pratik
+ */
 public class SimpleDynamoActivity extends Activity {
 
 	@Override

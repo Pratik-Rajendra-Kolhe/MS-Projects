@@ -8,6 +8,10 @@ import java.net.Socket;
 
 import android.content.Context;
 
+/**
+ *  
+ * @author pratik
+ */
 public class Receiver extends Thread {
 	int port;
 	ServerSocket server;
@@ -52,17 +56,14 @@ public class Receiver extends Thread {
 			try {
 				server.close();
 			} catch (IOException e1) {
-				// TODO Auto-generated catch block
 				e1.printStackTrace();
 			}
 			Receiver r=new Receiver(c);
 			r.beginReceivingMsg();
 
 		} catch (IOException e) {
-			// TODO Auto-generated catch block
 			e.printStackTrace();
 		} catch (ClassNotFoundException e) {
-			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}catch(Exception e){
 			System.out.println("Null pointer :/");
