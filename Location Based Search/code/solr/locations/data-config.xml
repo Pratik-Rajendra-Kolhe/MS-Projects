@@ -1,0 +1,19 @@
+<dataConfig>
+        <dataSource type="FileDataSource" encoding="UTF-8" />
+        <document>
+        <entity name="place"
+                processor="XPathEntityProcessor"
+                stream="true"
+                forEach="/docs/place/"
+                url="C:/Users/Pratik/workspace/IRProject-2/solr_home/locations/locations.xml"
+                transformer="RegexTransformer"
+                >
+            
+            <field column="location"     xpath="/docs/place/location" />
+            <field column="latlng"       xpath="/docs/place/latlng" />
+            <field column="country"      xpath="/docs/place/country" />
+			
+            
+       </entity>
+        </document>
+</dataConfig>

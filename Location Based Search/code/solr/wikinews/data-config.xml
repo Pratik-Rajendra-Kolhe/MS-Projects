@@ -1,0 +1,20 @@
+<dataConfig>
+        <dataSource type="FileDataSource" encoding="UTF-8"/>
+        <document>
+        <entity name="page"
+                processor="XPathEntityProcessor"
+                stream="true"
+                forEach="/docs/page/"
+                url="C:/Users/Pratik/workspace/IRProject-2/solr_home/wikinews/docs.xml"
+                transformer="RegexTransformer,DateFormatTransformer"
+                >
+            
+            <field column="title"      xpath="/docs/page/title" />
+			<field column="categories" xpath="/docs/page/categories" />
+			<field column="summary"     xpath="/docs/page/summary" />
+            <field column="text"        xpath="/docs/page/text" />
+			<field column="timestamp"  xpath="/docs/page/timestamp" dateTimeFormat="yyyy-MM-dd'T'hh:mm:ss'Z'" />
+            
+       </entity>
+        </document>
+</dataConfig>

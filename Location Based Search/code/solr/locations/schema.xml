@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<schema name="locations-schema" version="1.5">
+
+  <fields>
+    <field name="location" type="location_name" indexed="true" stored="true" required="true" multiValued="false" />
+    <field name="latlng" type="location" indexed="true" stored="true" required="true" multiValued="false" />
+    <field name="country" type="country_name" indexed="true" stored="true" required="true" multiValued="true" />
+	<field name="_version_" type="long" indexed="true" stored="true" multiValued="false" />
+	<dynamicField name="*_coordinate"  type="tdouble" indexed="true" stored="false"/>
+     
+  </fields>
+  <uniqueKey>location</uniqueKey>
+  <types>
+     <fieldType name="location_name" class="solr.TextField" sortMissingLast="true" >
+	  <analyzer type="index">
+        <tokenizer class="solr.StandardTokenizerFactory"/>
+		</analyzer>
+      <analyzer type="query">
+        <tokenizer class="solr.StandardTokenizerFactory"/>
+        <filter class="solr.SynonymFilterFactory" synonyms="synonyms.txt" ignoreCase="false" expand="false"/>
+       </analyzer>
+	 </fieldType>
+	 <fieldType name="country_name" class="solr.TextField" sortMissingLast="true" />
+	 <fieldType name="location" class="solr.LatLonType" subFieldSuffix="_coordinate"/>
+	 <fieldType name="long" class="solr.TrieLongField" precisionStep="0" positionIncrementGap="0"/>
+	 <fieldType name="tdouble" class="solr.TrieDoubleField" precisionStep="8" positionIncrementGap="0"/>
+	
+  </types>
+  </schema>

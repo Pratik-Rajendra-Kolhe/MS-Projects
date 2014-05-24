@@ -1,0 +1,152 @@
+form
+{
+	position:absolute;
+	top:0px;
+	left:0px;
+	padding:15px 0px 15px 0px;
+    text-align: center;
+    height:35px;
+    width:100%;
+    background:#dddddd;
+}
+.arrow-left1 {
+	position:absolute;
+	top:100px;
+	left:10px;
+	width: 0; 
+	height: 0; 
+	border-top: 10px solid transparent;
+	border-bottom: 10px solid transparent; 
+	border-right:10px solid #aaaaaa;
+}
+.arrow-left2 {
+	position:absolute;
+	top:100px;
+	left:11px;
+	width: 0; 
+	height: 0; 
+	border-top: 10px solid transparent;
+	border-bottom: 10px solid transparent; 
+	border-right:10px solid white;
+	z-index:1;
+}
+.map-box
+{
+	position:absolute;
+	top:85px;
+	left:20px;
+	min-width:50px;
+	min-height:50px;
+	max-width:500px;
+	max-height:500px;
+	padding:5px;
+	box-shadow:0px 1px 4px #aaaaaa;
+	border:1px solid #aaaaaa;
+}
+#googleMap
+{
+	position:absolute;
+	top:60px;
+	left:770px;
+	height:400px;
+	width:500px;
+	/*box-shadow:5px 2px 30px #aaaaaa;*/
+}
+
+input[name=query]
+{
+	outline:none;
+	margin:none;
+	padding:none;
+	padding-left:2px;
+	border:1px solid #aaaaaa;
+	height:25px;
+	font-size:90%;
+}
+
+input[name=query]:focus
+{
+	border:1px solid #8888ff;
+}
+
+input[type=submit]
+{
+	height:30px;
+	background:#5555ff;
+	color:white;
+	font-weight:bold;
+}
+
+input[type=submit]:hover
+{
+	background:#7777ff;
+}
+
+input[type=submit]:focus
+{
+	outline:none;
+}
+.dropDown
+{
+	position:absolute;
+	text-align:left;
+	border:1px solid #aaaaaa;
+	box-shadow:0px 1px 4px #aaaaaa;
+	border-top:none;
+	z-index:10;
+}
+
+.dropDown>div
+{
+	background:#ffffff;	
+}
+
+.dropDown>div>input
+{
+	outline:none;
+	border:none;
+	margin:none;
+	padding:none;
+	height:25px;
+	font-size:90%;
+}
+.goHome
+{
+	text-decoration:none;
+	position:absolute;
+	left:30px;
+	top:15px;
+	padding:5px;
+	height:20px;
+	background:#5555ff;
+	color:white;
+	font-weight:bold;
+}
+.results
+{
+	position:absolute;
+	top:100px;
+	left:30px;
+	width:50%;
+}
+.result
+{
+	
+}
+
+.title
+{
+	font-size:1.1em;
+	display:block;
+	white-space:nowrap;
+	overflow:hidden;
+	text-overflow:ellipsis;
+}
+
+.summary
+{
+	font-size:0.9em;
+	color:#555555;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}

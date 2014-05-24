@@ -1,0 +1,5 @@
+NYC, NY => New York
+US, USA => United States
+BR => Brazil
+IND,IN =>India
+AF => Afganistan
