@@ -8,6 +8,7 @@ import android.net.Uri;
 import android.database.sqlite.*;
 /**
  * GroupMessengerProvider is a key-value table.
+ * @author pratik
  */
 public class GroupMessengerProvider extends ContentProvider {
 
