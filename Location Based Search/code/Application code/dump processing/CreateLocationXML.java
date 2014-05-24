@@ -10,6 +10,10 @@ import java.net.URL;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ *  
+ * @author pratik
+ */
 
 public class CreateLocationXML {
 	public static void main(String[] args) throws Exception {

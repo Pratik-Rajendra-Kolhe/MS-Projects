@@ -20,6 +20,12 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.Iterator;
 
+
+/**
+ *  
+ * @author pratik
+ */
+
 public class LocationExtraction {
 
 	public static ArrayList<String[]> getLocation(String line) throws InvalidFormatException, IOException  {

@@ -1,5 +1,11 @@
 package Location;
 
+
+/**
+ *  
+ * @author pratik
+ */
+
 public class News {
 protected String title;
 protected String summary;

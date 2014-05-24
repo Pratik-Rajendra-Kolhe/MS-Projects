@@ -18,23 +18,19 @@ import javax.servlet.http.HttpServletResponse;
 
 /**
  * Servlet implementation class Suggest
+ * @author pratik
  */
 @WebServlet("/suggest")
 public class Suggest extends HttpServlet {
 	private static final long serialVersionUID = 1L;    
-    /**
-     * @see HttpServlet#HttpServlet()
-     */
+
     public Suggest() {
         super();
-        // TODO Auto-generated constructor stub
     }
 
-	/**
-	 * @see HttpServlet#doGet(HttpServletRequest request, HttpServletResponse response)
-	 */
+
 	protected void doGet(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
-		// TODO Auto-generated method stub		
+
 		System.out.println(new Date()+" "+request.getLocalName()+" "+request.getLocalAddr()+" "+request.getParameter("q"));
 		String req = request.getParameter("q");
 		String url = null;
@@ -64,11 +60,9 @@ public class Suggest extends HttpServlet {
 		pw.print(xml);
 	}
 
-	/**
-	 * @see HttpServlet#doPost(HttpServletRequest request, HttpServletResponse response)
-	 */
+
 	protected void doPost(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
-		// TODO Auto-generated method stub
+
 	}
 
 }

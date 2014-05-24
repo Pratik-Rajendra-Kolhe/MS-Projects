@@ -82,15 +82,12 @@ public class Parser
 			bw.append("</docs>");
 
 		} catch (FileNotFoundException e) {
-			// TODO Auto-generated catch block
 			e.printStackTrace();
 		} catch (NoSuchElementException e){
 						System.out.println("EOF");			
 		} catch (XMLStreamException e) {
-			// TODO Auto-generated catch block
 			e.printStackTrace();
 		} catch (IOException e1) {
-			// TODO Auto-generated catch block
 			e1.printStackTrace();
 		}
 		finally
@@ -99,7 +96,6 @@ public class Parser
 				if(xsr != null)
 					xsr.close();
 			} catch (XMLStreamException e) {
-				// TODO Auto-generated catch block
 				e.printStackTrace();
 			}
 		}

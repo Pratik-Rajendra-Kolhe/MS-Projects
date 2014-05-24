@@ -1,11 +1,16 @@
 
 import org.geonames.*;
+/**
+ *  
+ * @author pratik
+ */
+
 public class GeoName {
 
 	public static void getData(String location) throws Exception {
 	try{
-		WebService.setUserName("vivek"); // add your username here
-		 
+		
+		  WebService.setUserName("pratik");		 
 		  ToponymSearchCriteria searchCriteria = new ToponymSearchCriteria();
 		  searchCriteria.setQ(location);
 		  ToponymSearchResult searchResult = WebService.search(searchCriteria);

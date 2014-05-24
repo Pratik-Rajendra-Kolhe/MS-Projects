@@ -36,25 +36,19 @@ import org.geonames.WebService;
 
 /**
  * Servlet implementation class Location
+ * @author pratik
  */
 @WebServlet("/Location")
 public class Location extends HttpServlet {
 	private static final long serialVersionUID = 1L;
 	
-    /**
-     * @see HttpServlet#HttpServlet()
-     */
     public Location() {
         super();
         
-        // TODO Auto-generated constructor stub
     }
 
-	/**
-	 * @see HttpServlet#doGet(HttpServletRequest request, HttpServletResponse response)
-	 */
 	protected void doGet(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
-		// TODO Auto-generated method stub
+
 		String def = "http://en.wikinews.org/wiki/";
 		String query = request.getParameter("query");
 		System.out.println(query);
@@ -168,11 +162,7 @@ public class Location extends HttpServlet {
 		}
 	}
 	    
-	/**
-	 * @see HttpServlet#doPost(HttpServletRequest request, HttpServletResponse response)
-	 */
 	protected void doPost(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
-		// TODO Auto-generated method stub
 	}
 
 }

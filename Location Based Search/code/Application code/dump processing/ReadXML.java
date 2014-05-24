@@ -82,11 +82,9 @@ public class ReadXML {
 							try {
 								WriterXML.processXML(ttl, timestampFromXml, idFromXml, authorFromXml, textfromXml);
 							} catch (IOException e) {
-								// TODO Auto-generated catch block
 								e.printStackTrace();
 							}
 
-//						 
 						}
 					}
 				 

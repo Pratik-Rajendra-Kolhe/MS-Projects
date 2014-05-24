@@ -51,8 +51,6 @@ public class WriterXML {
 	        try {
 	            XMLEventWriter xmlEventWriter = xmlOutputFactory
 	                    .createXMLEventWriter(new FileOutputStream(fileName), "UTF-8");
-	            //For Debugging - below code to print XML to Console
-	            //XMLEventWriter xmlEventWriter = xmlOutputFactory.createXMLEventWriter(System.out);
 	            XMLEventFactory eventFactory = XMLEventFactory.newInstance();
 	            XMLEvent end = eventFactory.createDTD("\n");
 	            StartDocument startDocument = eventFactory.createStartDocument();

@@ -25,22 +25,16 @@ import opennlp.tools.tokenize.TokenizerModel;
 import opennlp.tools.util.InvalidFormatException;
 import opennlp.tools.util.Span;
 
+/**
+ *  
+ * @author pratik
+ */
+
 public class QueryProcessor extends News{
 	public static Map<String,News> results=null; // Map to store strings
 	public static int rank=1;
 	public static int d=500;
-	public static void main(String args[])
-	{
-		try {
-			getResults("tea in Assam");
-		} catch (InvalidFormatException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		} catch (IOException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		}
-	}
+
 	public static Map<Integer,News> getResults(String q) throws InvalidFormatException, IOException
 	{
 		
@@ -67,7 +61,6 @@ public class QueryProcessor extends News{
 			try {
 				latlng=GeoName.getData(querylocation.replaceAll(" ","+"));
 			} catch (Exception e) {
-				// TODO Auto-generated catch block
 				e.printStackTrace();
 			}
 	    if(latlng!=null && latlng.length()!=0)
@@ -131,7 +124,7 @@ public class QueryProcessor extends News{
 		    		Place loc=i.next();
 		    		if(loc.name.length()<1)
 		    			loc=i.next();
-					//	String url = "http://localhost:8080/solr/wikinews/select?q="+loc.name.concat(" "+query).trim().replaceAll(" ","+")+"&df=text&wt=xml&indent=true";
+
 			            String url="http://localhost:8080/solr/wikinews/select?q="+loc.name.concat(" AND "+query).trim().replaceAll(" ","+")+"&defType=edismax&df=categories&fl=title,summary,timestamp&qf=categories^5.0+title^10.0+text^0.3&bq=(categories:"+loc.name.replaceAll(" ","%20")+")^3&bq=(title:"+query.replaceAll(" ","%20")+")^2&sort=score%20desc,%20timestamp%20desc&wt=xml&indent=tr";
 			            URL obj = new URL(url);
 						HttpURLConnection con = (HttpURLConnection) obj.openConnection();
@@ -373,7 +366,6 @@ public class QueryProcessor extends News{
 		String latlng=new String();
 		try
 				{
-		        	 	//	String url = "http://localhost:8080/solr/wikinews/select?q="+loc.name.concat(" "+query).trim().replaceAll(" ","+")+"&df=text&wt=xml&indent=true";
 			            String url="http://localhost:8080/solr/wikinews/select?q="+query+"&defType=edismax&df=categories&fl=title,summary,timestamp&qf=categories^10+title^5.0+text^0.3&sort=score%20desc,%20timestamp%20desc&wt=xml&indent=tr";
 			            URL obj = new URL(url);
 						HttpURLConnection con = (HttpURLConnection) obj.openConnection();
