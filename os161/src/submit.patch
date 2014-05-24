@@ -1,0 +1,3558 @@
+diff --git a/.gitignore b/.gitignore
+index ccea0c4..68fafb1 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,9 +1,5 @@
+-.depend
+-.settings
+-.project
+-.cproject
+-/kern/compile/
+-defs.mk
+ build
+-/user/testbin/randcall/calls.c
+-*.swp
++.depend
++/defs.mk
++kern/compile/
++user/testbin/randcall/calls.c
+\ No newline at end of file
+diff --git a/kern/arch/mips/include/vm.h b/kern/arch/mips/include/vm.h
+index af393c7..73b14dc 100644
+--- a/kern/arch/mips/include/vm.h
++++ b/kern/arch/mips/include/vm.h
+@@ -66,6 +66,7 @@
+  * a valid address, and will make a *huge* mess if you scribble on it.
+  */
+ #define PADDR_TO_KVADDR(paddr) ((paddr)+MIPS_KSEG0)
++#define KVADDR_TO_PADDR(vaddr) ((vaddr)-MIPS_KSEG0)
+ 
+ /*
+  * The top of user space. (Actually, the address immediately above the
+diff --git a/kern/arch/mips/locore/trap.c b/kern/arch/mips/locore/trap.c
+index ff39633..446689d 100644
+--- a/kern/arch/mips/locore/trap.c
++++ b/kern/arch/mips/locore/trap.c
+@@ -39,6 +39,7 @@
+ #include <vm.h>
+ #include <mainbus.h>
+ #include <syscall.h>
++#include <process_syscalls.h>
+ 
+ 
+ /* in exception.S */
+@@ -74,7 +75,8 @@ void
+ kill_curthread(vaddr_t epc, unsigned code, vaddr_t vaddr)
+ {
+ 	int sig = 0;
+-
++(void)epc;
++(void)vaddr;
+ 	KASSERT(code < NTRAPCODES);
+ 	switch (code) {
+ 	    case EX_IRQ:
+@@ -111,10 +113,11 @@ kill_curthread(vaddr_t epc, unsigned code, vaddr_t vaddr)
+ 	/*
+ 	 * You will probably want to change this.
+ 	 */
+-
+-	kprintf("Fatal user mode trap %u sig %d (%s, epc 0x%x, vaddr 0x%x)\n",
+-		code, sig, trapcodenames[code], epc, vaddr);
+-	panic("I don't know how to handle this\n");
++	sys__exit(sig);
++	//
++//	kprintf("Fatal user mode trap %u sig %d (%s, epc 0x%x, vaddr 0x%x)\n",
++//		code, sig, trapcodenames[code], epc, vaddr);
++//	panic("I don't know how to handle this\n");
+ }
+ 
+ /*
+diff --git a/kern/arch/mips/syscall/syscall.c b/kern/arch/mips/syscall/syscall.c
+index 0f773bd..3e054d8 100644
+--- a/kern/arch/mips/syscall/syscall.c
++++ b/kern/arch/mips/syscall/syscall.c
+@@ -1,6 +1,6 @@
+ /*
+  * Copyright (c) 2000, 2001, 2002, 2003, 2004, 2005, 2008, 2009
+- *	The President and Fellows of Harvard College.
++ *  The President and Fellows of Harvard College.
+  *
+  * Redistribution and use in source and binary forms, with or without
+  * modification, are permitted provided that the following conditions
+@@ -35,8 +35,15 @@
+ #include <thread.h>
+ #include <current.h>
+ #include <syscall.h>
+-
+-
++#include <copyinout.h>
++#include <vm.h>
++#include <addrspace.h>
++/*
++ * For File System calls
++ * Added By: Pratik
++ */
++#include <file_syscalls.h>
++#include <process_syscalls.h>
+ /*
+  * System call dispatcher.
+  *
+@@ -78,72 +85,154 @@
+ void
+ syscall(struct trapframe *tf)
+ {
+-	int callno;
+-	int32_t retval;
+-	int err;
+-
+-	KASSERT(curthread != NULL);
+-	KASSERT(curthread->t_curspl == 0);
+-	KASSERT(curthread->t_iplhigh_count == 0);
+-
+-	callno = tf->tf_v0;
+-
+-	/*
+-	 * Initialize retval to 0. Many of the system calls don't
+-	 * really return a value, just 0 for success and -1 on
+-	 * error. Since retval is the value returned on success,
+-	 * initialize it to 0 by default; thus it's not necessary to
+-	 * deal with it except for calls that return other values, 
+-	 * like write.
+-	 */
+-
+-	retval = 0;
+-
+-	switch (callno) {
+-	    case SYS_reboot:
+-		err = sys_reboot(tf->tf_a0);
+-		break;
+-
+-	    case SYS___time:
+-		err = sys___time((userptr_t)tf->tf_a0,
+-				 (userptr_t)tf->tf_a1);
+-		break;
+-
+-	    /* Add stuff here */
+- 
+-	    default:
+-		kprintf("Unknown syscall %d\n", callno);
+-		err = ENOSYS;
+-		break;
+-	}
+-
+-
+-	if (err) {
+-		/*
+-		 * Return the error code. This gets converted at
+-		 * userlevel to a return value of -1 and the error
+-		 * code in errno.
+-		 */
+-		tf->tf_v0 = err;
+-		tf->tf_a3 = 1;      /* signal an error */
+-	}
+-	else {
+-		/* Success. */
+-		tf->tf_v0 = retval;
+-		tf->tf_a3 = 0;      /* signal no error */
+-	}
+-	
+-	/*
+-	 * Now, advance the program counter, to avoid restarting
+-	 * the syscall over and over again.
+-	 */
+-	
+-	tf->tf_epc += 4;
+-
+-	/* Make sure the syscall code didn't forget to lower spl */
+-	KASSERT(curthread->t_curspl == 0);
+-	/* ...or leak any spinlocks */
+-	KASSERT(curthread->t_iplhigh_count == 0);
++    int callno;
++    int32_t retval;
++    int err;
++
++    KASSERT(curthread != NULL);
++    KASSERT(curthread->t_curspl == 0);
++    KASSERT(curthread->t_iplhigh_count == 0);
++
++    callno = tf->tf_v0;
++
++    /*
++     * Initialize retval to 0. Many of the system calls don't
++     * really return a value, just 0 for success and -1 on
++     * error. Since retval is the value returned on success,
++     * initialize it to 0 by default; thus it's not necessary to
++     * deal with it except for calls that return other values,
++     * like write.
++     */
++
++    retval = 0;
++
++    switch (callno) {
++    case SYS_reboot:
++        err = sys_reboot(tf->tf_a0);
++        break;
++
++    case SYS___time:
++        err = sys___time((userptr_t)tf->tf_a0,
++                (userptr_t)tf->tf_a1);
++        break;
++
++        /*
++         * For file system calls
++         * Added By: Pratik
++         */
++
++    case SYS_open:
++        err = sys_open((char*) tf->tf_a0,tf->tf_a1,&retval);
++        break;
++
++    case SYS_close:
++        err = sys_close(tf->tf_a0);
++        break;
++
++    case SYS_write:
++        err = sys_write((int)tf->tf_a0,(userptr_t)tf->tf_a1,tf->tf_a2,&retval);
++        break;
++
++    case SYS_lseek:
++    {
++        off_t pos = 0;
++
++        // packing 64 bit offset to pair (a2:a3)
++
++        pos |= tf->tf_a2;
++        pos <<= 32;
++        pos |= tf->tf_a3;
++
++        // getting whence from user stack
++
++        int whence;
++        if ((err = copyin((const_userptr_t)(tf->tf_sp+16), &whence, sizeof(whence))) != 0) {
++            break;
++        }
++
++        off_t ret;
++        err = sys_lseek((int)tf->tf_a0, pos, whence,&retval);
++        ret=retval;
++        // unpacking 64 bit returned offset to pair (v0:v1)
++        if (!err) {
++            retval = ret>>32;
++            tf->tf_v1 = ret;
++        }
++    }
++    break;
++
++    case SYS_dup2:
++        err = sys_dup2(tf->tf_a0,tf->tf_a1,&retval);
++        break;
++
++    case SYS_chdir:
++        err = sys_chdir((char *)tf->tf_a0);
++        break;
++
++    case SYS___getcwd:
++        err = sys__getcwd((char*)tf->tf_a0,tf->tf_a1,&retval);
++        break;
++
++    case SYS_read:
++        err = sys_read(tf->tf_a0,(userptr_t)tf->tf_a1,tf->tf_a2,&retval);
++        break;
++
++    case SYS_fork:
++        err = sys_fork(enter_forked_process, tf, &retval);
++        break;
++
++    case SYS_getpid:
++        err = sys_getpid(&retval);
++        break;
++
++    case SYS_waitpid:
++        err = sys_waitpid(tf->tf_a0,(int*)tf->tf_a1,tf->tf_a2,&retval);
++        break;
++
++    case SYS__exit:
++        sys__exit(tf->tf_a0);
++     break;
++
++    case SYS_execv:
++        err=sys_execv((char*)tf->tf_a0,(char **)tf->tf_a1);
++    break;
++    case SYS_sbrk:
++        err=sys_sbrk(tf->tf_a0,&retval);
++        break;
++
++    default:
++        kprintf("Unknown syscall %d\n", callno);
++        err = ENOSYS;
++        break;
++    }
++
++
++    if (err) {
++        /*
++         * Return the error code. This gets converted at
++         * userlevel to a return value of -1 and the error
++         * code in errno.
++         */
++        tf->tf_v0 = err;
++        tf->tf_a3 = 1;      /* signal an error */
++    }
++    else {
++        /* Success. */
++        tf->tf_v0 = retval;
++        tf->tf_a3 = 0;      /* signal no error */
++    }
++
++    /*
++     * Now, advance the program counter, to avoid restarting
++     * the syscall over and over again.
++     */
++
++    tf->tf_epc += 4;
++
++    /* Make sure the syscall code didn't forget to lower spl */
++    KASSERT(curthread->t_curspl == 0);
++    /* ...or leak any spinlocks */
++    KASSERT(curthread->t_iplhigh_count == 0);
+ }
+ 
+ /*
+@@ -155,7 +244,17 @@ syscall(struct trapframe *tf)
+  * Thus, you can trash it and do things another way if you prefer.
+  */
+ void
+-enter_forked_process(struct trapframe *tf)
++enter_forked_process(void *mytf, unsigned long parent_addr)
+ {
+-	(void)tf;
++    struct trapframe newtf;
++
++    memcpy(&newtf, mytf, sizeof(struct trapframe));
++    kfree(mytf);
++
++    newtf.tf_a3 = 0;
++    newtf.tf_v0 = 0;
++    newtf.tf_epc += 4;
++
++    mips_usermode(&newtf);
++    (void)parent_addr;
+ }
+diff --git a/kern/arch/mips/vm/dumbvm.c b/kern/arch/mips/vm/dumbvm.c
+index ca9992a..190f983 100644
+--- a/kern/arch/mips/vm/dumbvm.c
++++ b/kern/arch/mips/vm/dumbvm.c
+@@ -245,7 +245,7 @@ int
+ as_define_region(struct addrspace *as, vaddr_t vaddr, size_t sz,
+ 		 int readable, int writeable, int executable)
+ {
+-	size_t npages; 
++	size_t npages;
+ 
+ 	/* Align the region. First, the base... */
+ 	sz += vaddr & ~(vaddr_t)PAGE_FRAME;
+diff --git a/kern/conf/conf.kern b/kern/conf/conf.kern
+index d527f61..961b20b 100644
+--- a/kern/conf/conf.kern
++++ b/kern/conf/conf.kern
+@@ -427,3 +427,13 @@ file		test/synchtest.c
+ file		test/malloctest.c
+ file		test/fstest.c
+ optfile net	test/nettest.c
++
++#File system calls path#
++#Added by: Pratik#
++
++file        syscall/file_syscalls.c
++file        syscall/process_syscalls.c
++
++file        vm/vm.c
++file        vm/coremap.c
++
+diff --git a/kern/include/addrspace.h b/kern/include/addrspace.h
+index 6788e97..090a9ae 100644
+--- a/kern/include/addrspace.h
++++ b/kern/include/addrspace.h
+@@ -36,17 +36,34 @@
+ 
+ 
+ #include <vm.h>
+-#include "opt-dumbvm.h"
++//#include "opt-dumbvm.h"
+ 
+ struct vnode;
+-
+-
++//calculated by formula - ((4096 / sizeof(struct page_entry)) - 1)
++#define PTABLE_ARRAY_SIZE 338
++//max stack size 1mb
++#define STACK_BASE 0x7ff00000
+ /* 
+  * Address space - data structure associated with the virtual memory
+  * space of a process.
+  *
+  * You write this.
+  */
++struct page_entry {
++	vaddr_t page_vaddr;
++	paddr_t page_paddr;
++	unsigned char isRead:1;
++	unsigned char isWrite:1;
++	unsigned char isExe:1;
++	unsigned char isShared:1;
++//	unsigned char isOnDisk:1;
++};
++
++struct page_table {
++	struct page_entry table[PTABLE_ARRAY_SIZE];
++	unsigned int entry_count:9;
++	struct page_table *nextPageTable;
++};
+ 
+ struct addrspace {
+ #if OPT_DUMBVM
+@@ -59,6 +76,14 @@ struct addrspace {
+         paddr_t as_stackpbase;
+ #else
+         /* Put stuff here for your VM system */
++        vaddr_t vbreakbase;
++        vaddr_t vbreaktop;
++        unsigned int heapNPages;
++        vaddr_t vstart;
++        struct page_table start;
++        struct page_table *end;
++        size_t codeNPages;
++        size_t dataNPages;
+ #endif
+ };
+ 
+@@ -111,6 +136,9 @@ int               as_complete_load(struct addrspace *as);
+ int               as_define_stack(struct addrspace *as, vaddr_t *initstackptr);
+ 
+ 
++void addPageEntry(vaddr_t vaddr, paddr_t paddr, int isRead, int isWrite, int isExe);
++paddr_t removePageEntry(vaddr_t vaddr);
++
+ /*
+  * Functions in loadelf.c
+  *    load_elf - load an ELF user program executable into the current
+diff --git a/kern/include/coremap.h b/kern/include/coremap.h
+new file mode 100644
+index 0000000..79aa215
+--- /dev/null
++++ b/kern/include/coremap.h
+@@ -0,0 +1,34 @@
++/*
++ * coremap.h
++ *
++ *  Created on: May 1, 2014
++ *      Author: trinity
++ */
++/*
++ * Coremap
++ * Added by : Pratik
++ *
++ */
++#ifndef COREMAP_H_
++#define COREMAP_H_
++
++#include<types.h>
++#include<machine/vm.h>
++#include<vm.h>
++
++struct cm_entry{
++	unsigned int chunk_cnt:17;
++	unsigned char is_kern_page:1;
++	unsigned char is_allocated:1;
++//	struct page_entry *pe;
++};
++
++paddr_t coremap_bootstrap (void);
++paddr_t getpaddr(int npages);
++void init_coremap(void);
++void addtocoremap(paddr_t paddr,int npages, bool iskern);
++unsigned roundUp(unsigned  numToRound, int multiple);
++void removefromcoremap(paddr_t paddr);
++int getindex(paddr_t paddr);
++paddr_t indextopaddr(int index);
++#endif /* COREMAP_H_ */
+diff --git a/kern/include/file_syscalls.h b/kern/include/file_syscalls.h
+new file mode 100644
+index 0000000..1ffdd5f
+--- /dev/null
++++ b/kern/include/file_syscalls.h
+@@ -0,0 +1,41 @@
++/*
++ * file_syscalls.h
++ *
++ *  Created on: Mar 5, 2014
++ *      Author: trinity
++ */
++/*
++ * Header for file System calls
++ * Added By: Pratik
++ */
++#ifndef FILE_SYSCALLS_H_
++#define FILE_SYSCALLS_H_
++
++#include<limits.h>
++#include<types.h>
++#include<vnode.h>
++#include<synch.h>
++
++struct file_handle{
++	char filename[MAX_FILENAME_LEN];
++	int flags;
++    off_t offset;
++    int references;
++    struct lock* filelock;
++    struct vnode *vnode;
++};
++
++
++
++
++int init_filetable(struct file_handle **fd_table);
++int sys_open(char *fname,int flag,int *retval);
++int sys_close(int fd);
++int sys_write(int fd, void *buf, size_t nbytes,int *retval);
++off_t sys_lseek(int fd, off_t pos, int whence,int *retval);
++int sys_dup2(int oldfd, int newfd,int *retval);
++int sys_chdir(const char *pathname);
++int sys__getcwd(char *buf, size_t buflen,int *retval);
++int sys_read(int fd, void *buf, size_t buflen, int *retval);
++
++#endif /* FILE_SYSCALLS_H_ */
+diff --git a/kern/include/kern/limits.h b/kern/include/kern/limits.h
+index 3fad3f2..fdba50d 100644
+--- a/kern/include/kern/limits.h
++++ b/kern/include/kern/limits.h
+@@ -68,6 +68,9 @@
+ /* Max value for a process ID */
+ #define __PID_MAX       32767
+ 
++/* Max no. of processes that can be running simultaneously */
++#define __PROC_MAX 		100
++
+ /* Max bytes for atomic pipe I/O -- see description in the pipe() man page */
+ #define __PIPE_BUF      512
+ 
+diff --git a/kern/include/lib.h b/kern/include/lib.h
+index da04195..b0a5261 100644
+--- a/kern/include/lib.h
++++ b/kern/include/lib.h
+@@ -109,6 +109,7 @@ extern uint32_t dbflags;
+  */
+ #define DEBUG(d, ...) ((dbflags & (d)) ? kprintf(__VA_ARGS__) : 0)
+ 
++
+ /*
+  * Random number generator, using the random device.
+  *
+diff --git a/kern/include/limits.h b/kern/include/limits.h
+index 01684c4..26b3cac 100644
+--- a/kern/include/limits.h
++++ b/kern/include/limits.h
+@@ -49,4 +49,10 @@
+ #define OPEN_MAX        __OPEN_MAX
+ #define IOV_MAX         __IOV_MAX
+ 
++/*
++ * Limits for FILESYSTEM
++ * Added By:Pratik
++ */
++#define MAX_FILENAME_LEN   __PATH_MAX
++
+ #endif /* _LIMITS_H_ */
+diff --git a/kern/include/process_syscalls.h b/kern/include/process_syscalls.h
+new file mode 100644
+index 0000000..921bae2
+--- /dev/null
++++ b/kern/include/process_syscalls.h
+@@ -0,0 +1,38 @@
++/*
++ * process_syscalls.h
++ *
++ *  Created on: Mar 8, 2014
++ *      Author: trinity
++ */
++
++#ifndef PROCESS_SYSCALLS_H_
++#define PROCESS_SYSCALLS_H_
++
++#include <limits.h>
++#include <synch.h>
++
++struct process {
++	pid_t pid;
++    pid_t ppid;
++    struct semaphore* exitsem;
++    bool exited;
++    int exitcode;
++    struct thread* self;
++};
++
++//initialized in thread_bootstrap
++int pid_counter;
++struct process *process_table[__PROC_MAX];
++struct semaphore *forkSem;
++struct semaphore *execvSem;
++
++pid_t pid_alloc(void);
++int sys_getpid(int *retval);
++int init_process(pid_t pid);
++pid_t sys_fork(void (*entrypoint)(void *data1, unsigned long data2),
++				void *parenttf, int *retval);
++pid_t sys_waitpid(pid_t pid, int *status, int options,int *retval);
++void sys__exit(int exitcode);
++int sys_execv(char *progname, char **argv);
++
++#endif /* PROCESS_SYSCALLS_H_ */
+diff --git a/kern/include/synch.h b/kern/include/synch.h
+index ac3714b..6f4ff43 100644
+--- a/kern/include/synch.h
++++ b/kern/include/synch.h
+@@ -76,6 +76,9 @@ struct lock {
+         char *lk_name;
+         // add what you need here
+         // (don't forget to mark things volatile as needed)
++        volatile struct thread *owner_thread;
++        struct wchan *lk_wchan;
++        struct spinlock lk_spinlock;
+ };
+ 
+ struct lock *lock_create(const char *name);
+@@ -115,6 +118,8 @@ struct cv {
+         char *cv_name;
+         // add what you need here
+         // (don't forget to mark things volatile as needed)
++        struct wchan *cv_wchan;
++        struct spinlock cv_spinlock;
+ };
+ 
+ struct cv *cv_create(const char *name);
+@@ -143,6 +148,11 @@ void cv_broadcast(struct cv *cv, struct lock *lock);
+ 
+ struct rwlock {
+         char *rwlock_name;
++        struct lock *lk_read;
++        struct lock *lk_write;
++        struct semaphore *sem_resource;
++        volatile int max_readers;
++
+ };
+ 
+ struct rwlock * rwlock_create(const char *);
+diff --git a/kern/include/syscall.h b/kern/include/syscall.h
+index befd3d8..fd7cf6e 100644
+--- a/kern/include/syscall.h
++++ b/kern/include/syscall.h
+@@ -44,7 +44,7 @@ void syscall(struct trapframe *tf);
+  */
+ 
+ /* Helper for fork(). You write this. */
+-void enter_forked_process(struct trapframe *tf);
++void enter_forked_process(void *mytf, unsigned long parentaddr);
+ 
+ /* Enter user mode. Does not return. */
+ void enter_new_process(int argc, userptr_t argv, vaddr_t stackptr,
+diff --git a/kern/include/test.h b/kern/include/test.h
+index 240d583..5ac17e8 100644
+--- a/kern/include/test.h
++++ b/kern/include/test.h
+@@ -105,7 +105,7 @@ int mallocstress(int, char **);
+ int nettest(int, char **);
+ 
+ /* Routine for running a user-level program. */
+-int runprogram(char *progname);
++int runprogram(char *progname,char **argc,unsigned long nargs);
+ 
+ /* Kernel menu system. */
+ void menu(char *argstr);
+diff --git a/kern/include/thread.h b/kern/include/thread.h
+index 86706ca..060b825 100644
+--- a/kern/include/thread.h
++++ b/kern/include/thread.h
+@@ -38,6 +38,13 @@
+ 
+ #include <spinlock.h>
+ #include <threadlist.h>
++/*
++ * Added for FILESYSTEM
++ * Added By:Pratik
++ */
++#include <limits.h>
++#include <file_syscalls.h>
++#include <process_syscalls.h>
+ 
+ struct addrspace;
+ struct cpu;
+@@ -112,6 +119,19 @@ struct thread {
+ 	struct vnode *t_cwd;		/* current working directory */
+ 
+ 	/* add more here as needed */
++	/*
++	 * Added for FILESYSTEM
++	 * Added By: Pratik
++	 */
++
++	struct  file_handle *fd_table[OPEN_MAX];
++
++	/*
++	 * Added for Process syscalls
++	 * Added By: Pratik
++	 */
++   	pid_t pid;
++   	int ptable_index;
+ };
+ 
+ /* Call once during system startup to allocate data structures. */
+@@ -164,5 +184,6 @@ void schedule(void);
+  */
+ void thread_consider_migration(void);
+ 
++void tlb_broadcast(void);
+ 
+ #endif /* _THREAD_H_ */
+diff --git a/kern/include/vm.h b/kern/include/vm.h
+index e4e73d0..c1ed546 100644
+--- a/kern/include/vm.h
++++ b/kern/include/vm.h
+@@ -1,6 +1,6 @@
+ /*
+  * Copyright (c) 2000, 2001, 2002, 2003, 2004, 2005, 2008, 2009
+- *	The President and Fellows of Harvard College.
++ *  The President and Fellows of Harvard College.
+  *
+  * Redistribution and use in source and binary forms, with or without
+  * modification, are permitted provided that the following conditions
+@@ -36,14 +36,16 @@
+  * You'll probably want to add stuff here.
+  */
+ 
+-
+ #include <machine/vm.h>
++#include <spinlock.h>
+ 
+ /* Fault-type arguments to vm_fault() */
+ #define VM_FAULT_READ        0    /* A read was attempted */
+ #define VM_FAULT_WRITE       1    /* A write was attempted */
+ #define VM_FAULT_READONLY    2    /* A write to a readonly page was attempted*/
+ 
++struct spinlock coremap_slock;
++
+ 
+ /* Initialization function */
+ void vm_bootstrap(void);
+@@ -59,5 +61,13 @@ void free_kpages(vaddr_t addr);
+ void vm_tlbshootdown_all(void);
+ void vm_tlbshootdown(const struct tlbshootdown *);
+ 
++/*
++ * Methods to get pages for alloc
++ * Added by:Pratik
++// */
++
++void page_free(vaddr_t addr);
++int page_alloc(int npages, vaddr_t vaddr);
++int sys_sbrk(intptr_t amount,int *retval);
+ 
+ #endif /* _VM_H_ */
+diff --git a/kern/include/vnode.h b/kern/include/vnode.h
+index d97e332..a60f91c 100644
+--- a/kern/include/vnode.h
++++ b/kern/include/vnode.h
+@@ -258,8 +258,8 @@ struct vnode_ops {
+ #define VOP_TRUNCATE(vn, pos)           (__VOP(vn, truncate)(vn, pos))
+ #define VOP_NAMEFILE(vn, uio)           (__VOP(vn, namefile)(vn, uio))
+ 
+-#define VOP_CREAT(vn,nm,excl,mode,res)  (__VOP(vn, creat)(vn,nm,excl,mode,res))
+ #define VOP_SYMLINK(vn, name, content)  (__VOP(vn, symlink)(vn, name, content))
++#define VOP_CREAT(vn,nm,excl,mode,res)  (__VOP(vn, creat)(vn,nm,excl,mode,res))
+ #define VOP_MKDIR(vn, name, mode)       (__VOP(vn, mkdir)(vn, name, mode))
+ #define VOP_LINK(vn, name, vn2)         (__VOP(vn, link)(vn, name, vn2))
+ #define VOP_REMOVE(vn, name)            (__VOP(vn, remove)(vn, name))
+diff --git a/kern/startup/main.c b/kern/startup/main.c
+index be4c4b8..61ed2ff 100644
+--- a/kern/startup/main.c
++++ b/kern/startup/main.c
+@@ -30,6 +30,8 @@
+ /*
+  * Main.
+  */
++/*pratikra@buffalo.edu
++*/
+ 
+ #include <types.h>
+ #include <kern/errno.h>
+@@ -100,12 +102,16 @@ boot(void)
+ 	kprintf("%s", harvard_copyright);
+ 	kprintf("\n");
+ 
+-	kprintf("Put-your-group-name-here's system version %s (%s #%d)\n", 
++	kprintf("Pratik-Anuj's system version %s (%s #%d)\n", 
+ 		GROUP_VERSION, buildconfig, buildversion);
+ 	kprintf("\n");
+ 
++kprintf("pratikra@buffalo.edu,anujgarg@buffalo.edu");
++	kprintf("\n");
++
+ 	/* Early initialization. */
+ 	ram_bootstrap();
++	vm_bootstrap();
+ 	thread_bootstrap();
+ 	hardclock_bootstrap();
+ 	vfs_bootstrap();
+@@ -120,7 +126,6 @@ boot(void)
+ 	kprintf("\n");
+ 
+ 	/* Late phase of initialization. */
+-	vm_bootstrap();
+ 	kprintf_bootstrap();
+ 	thread_start_cpus();
+ 
+diff --git a/kern/startup/menu.c b/kern/startup/menu.c
+index 6c71551..2c67b47 100644
+--- a/kern/startup/menu.c
++++ b/kern/startup/menu.c
+@@ -40,6 +40,7 @@
+ #include <sfs.h>
+ #include <syscall.h>
+ #include <test.h>
++#include <process_syscalls.h>
+ #include "opt-synchprobs.h"
+ #include "opt-sfs.h"
+ #include "opt-net.h"
+@@ -90,17 +91,15 @@ cmd_progthread(void *ptr, unsigned long nargs)
+ 	int result;
+ 
+ 	KASSERT(nargs >= 1);
+-
+-	if (nargs > 2) {
+-		kprintf("Warning: argument passing from menu not supported\n");
+-	}
++	strcpy(progname, args[0]);
++//	if (nargs > 2) {
++//
++//		kprintf("Warning: argument passing from menu not supported\n");
++//	}
+ 
+ 	/* Hope we fit. */
+ 	KASSERT(strlen(args[0]) < sizeof(progname));
+-
+-	strcpy(progname, args[0]);
+-
+-	result = runprogram(progname);
++	result = runprogram(progname,args,nargs);
+ 	if (result) {
+ 		kprintf("Running program %s failed: %s\n", args[0],
+ 			strerror(result));
+@@ -130,18 +129,24 @@ common_prog(int nargs, char **args)
+ 
+ #if OPT_SYNCHPROBS
+ 	kprintf("Warning: this probably won't work with a "
+-		"synchronization-problems kernel.\n");
++			"synchronization-problems kernel.\n");
+ #endif
+ 
++	struct thread *userthread;
++	int status;
++	int retval;
+ 	result = thread_fork(args[0] /* thread name */,
+ 			cmd_progthread /* thread function */,
+ 			args /* thread arg */, nargs /* thread arg */,
+-			NULL);
++			&userthread);
++
+ 	if (result) {
+ 		kprintf("thread_fork failed: %s\n", strerror(result));
+ 		return result;
+ 	}
+ 
++	sys_waitpid(userthread->pid,&status,0,&retval);
++
+ 	return 0;
+ }
+ 
+diff --git a/kern/synchprobs/problems.c b/kern/synchprobs/problems.c
+index 81d2f0e..fe97d91 100644
+--- a/kern/synchprobs/problems.c
++++ b/kern/synchprobs/problems.c
+@@ -47,63 +47,110 @@
+ // functions will allow you to do local initialization. They are called at
+ // the top of the corresponding driver code.
+ 
++struct cv *malecv;
++struct cv *femalecv;
++struct cv *mmcv;
++struct lock *lk;
++int noOfMales = 0;
++int noOfFemales = 0;
++int noOfMatchmakers = 0;
++
+ void whalemating_init() {
+-  return;
++	malecv = cv_create("malecv");
++	femalecv = cv_create("femalecv");
++	mmcv = cv_create("mmcv");
++    lk = lock_create("mainlock");
+ }
+ 
+ // 20 Feb 2012 : GWA : Adding at the suggestion of Nikhil Londhe. We don't
+ // care if your problems leak memory, but if you do, use this to clean up.
+ 
+ void whalemating_cleanup() {
+-  return;
++	cv_destroy(malecv);
++	cv_destroy(femalecv);
++	cv_destroy(mmcv);
++	lock_destroy(lk);
+ }
+ 
+ void
+ male(void *p, unsigned long which)
+ {
+-	struct semaphore * whalematingMenuSemaphore = (struct semaphore *)p;
+-  (void)which;
+-  
+-  male_start();
+-	// Implement this function 
+-  male_end();
+-
+-  // 08 Feb 2012 : GWA : Please do not change this code. This is so that your
+-  // whalemating driver can return to the menu cleanly.
+-  V(whalematingMenuSemaphore);
+-  return;
++	struct semaphore *whalematingMenuSemaphore = (struct semaphore *)p;
++	(void)which;
++	// Implement this function
++
++	male_start();
++
++	lock_acquire(lk);
++	noOfMales++;
++	if (noOfFemales && noOfMatchmakers) {
++		cv_signal(femalecv, NULL);
++		cv_signal(mmcv, NULL);
++	} else {
++		cv_wait(malecv, lk);
++	}
++	male_end();
++	noOfMales--;
++	lock_release(lk);
++
++	// 08 Feb 2012 : GWA : Please do not change this code. This is so that your
++	// whalemating driver can return to the menu cleanly.
++	V(whalematingMenuSemaphore);
++	return;
+ }
+ 
+ void
+ female(void *p, unsigned long which)
+ {
+ 	struct semaphore * whalematingMenuSemaphore = (struct semaphore *)p;
+-  (void)which;
+-  
+-  female_start();
+-	// Implement this function 
+-  female_end();
+-  
+-  // 08 Feb 2012 : GWA : Please do not change this code. This is so that your
+-  // whalemating driver can return to the menu cleanly.
+-  V(whalematingMenuSemaphore);
+-  return;
++	(void)which;
++	// Implement this function
++
++	female_start();
++
++	lock_acquire(lk);
++	noOfFemales++;
++	if (noOfMales && noOfMatchmakers) {
++		cv_signal(malecv, NULL);
++		cv_signal(mmcv, NULL);
++	} else {
++		cv_wait(femalecv, lk);
++	}
++	female_end();
++	noOfFemales--;
++	lock_release(lk);
++
++	// 08 Feb 2012 : GWA : Please do not change this code. This is so that your
++	// whalemating driver can return to the menu cleanly.
++	V(whalematingMenuSemaphore);
++	return;
+ }
+ 
+ void
+ matchmaker(void *p, unsigned long which)
+ {
+ 	struct semaphore * whalematingMenuSemaphore = (struct semaphore *)p;
+-  (void)which;
+-  
+-  matchmaker_start();
+-	// Implement this function 
+-  matchmaker_end();
+-  
+-  // 08 Feb 2012 : GWA : Please do not change this code. This is so that your
+-  // whalemating driver can return to the menu cleanly.
+-  V(whalematingMenuSemaphore);
+-  return;
++	(void)which;
++	// Implement this function
++
++	matchmaker_start();
++
++	lock_acquire(lk);
++	noOfMatchmakers++;
++	if (noOfMales && noOfFemales) {
++		cv_signal(femalecv, NULL);
++		cv_signal(malecv, NULL);
++	} else {
++		cv_wait(mmcv, lk);
++	}
++	matchmaker_end();
++	noOfMatchmakers--;
++	lock_release(lk);
++
++	// 08 Feb 2012 : GWA : Please do not change this code. This is so that your
++	// whalemating driver can return to the menu cleanly.
++	V(whalematingMenuSemaphore);
++	return;
+ }
+ 
+ /*
+@@ -137,49 +184,101 @@ matchmaker(void *p, unsigned long which)
+ // functions will allow you to do local initialization. They are called at
+ // the top of the corresponding driver code.
+ 
++struct lock *quadlock[4];
++struct semaphore *allow3sem;
++
+ void stoplight_init() {
+-  return;
++	quadlock[0] = lock_create("quad0lock");
++	quadlock[1] = lock_create("quad1lock");
++	quadlock[2] = lock_create("quad2lock");
++	quadlock[3] = lock_create("quad3lock");
++	allow3sem = sem_create("allow3sem", 3);
++	return;
+ }
+ 
+ // 20 Feb 2012 : GWA : Adding at the suggestion of Nikhil Londhe. We don't
+ // care if your problems leak memory, but if you do, use this to clean up.
+ 
+ void stoplight_cleanup() {
+-  return;
++	lock_destroy(quadlock[0]);
++	lock_destroy(quadlock[1]);
++	lock_destroy(quadlock[2]);
++	lock_destroy(quadlock[3]);
++	sem_destroy(allow3sem);
++	return;
+ }
+ 
+ void
+ gostraight(void *p, unsigned long direction)
+ {
+ 	struct semaphore * stoplightMenuSemaphore = (struct semaphore *)p;
+-  (void)direction;
+-  
+-  // 08 Feb 2012 : GWA : Please do not change this code. This is so that your
+-  // stoplight driver can return to the menu cleanly.
+-  V(stoplightMenuSemaphore);
+-  return;
++	(void)direction;
++
++	P(allow3sem);
++
++	lock_acquire(quadlock[direction]);
++	inQuadrant(direction);
++
++	lock_acquire(quadlock[(direction + 3) % 4]);
++	inQuadrant((direction + 3) % 4);
++	lock_release(quadlock[direction]);
++
++	leaveIntersection();
++	lock_release(quadlock[(direction + 3) % 4]);
++
++	V(allow3sem);
++
++	// 08 Feb 2012 : GWA : Please do not change this code. This is so that your
++	// stoplight driver can return to the menu cleanly.
++	V(stoplightMenuSemaphore);
++	return;
+ }
+ 
+ void
+ turnleft(void *p, unsigned long direction)
+ {
+ 	struct semaphore * stoplightMenuSemaphore = (struct semaphore *)p;
+-  (void)direction;
+-  
+-  // 08 Feb 2012 : GWA : Please do not change this code. This is so that your
+-  // stoplight driver can return to the menu cleanly.
+-  V(stoplightMenuSemaphore);
+-  return;
++	(void)direction;
++
++	P(allow3sem);
++
++	lock_acquire(quadlock[direction]);
++	inQuadrant(direction);
++
++	lock_acquire(quadlock[(direction + 3) % 4]);
++	inQuadrant((direction + 3) % 4);
++	lock_release(quadlock[direction]);
++
++	lock_acquire(quadlock[(direction + 2) % 4]);
++	inQuadrant((direction + 2) % 4);
++	lock_release(quadlock[(direction + 3) % 4]);
++
++	leaveIntersection();
++	lock_release(quadlock[(direction + 2) % 4]);
++
++	V(allow3sem);
++
++	// 08 Feb 2012 : GWA : Please do not change this code. This is so that your
++	// stoplight driver can return to the menu cleanly.
++	V(stoplightMenuSemaphore);
++	return;
+ }
+ 
+ void
+ turnright(void *p, unsigned long direction)
+ {
+ 	struct semaphore * stoplightMenuSemaphore = (struct semaphore *)p;
+-  (void)direction;
++	(void)direction;
++
++	P(allow3sem);
++	lock_acquire(quadlock[direction]);
++	inQuadrant(direction);
++	leaveIntersection();
++	lock_release(quadlock[direction]);
++	V(allow3sem);
+ 
+-  // 08 Feb 2012 : GWA : Please do not change this code. This is so that your
+-  // stoplight driver can return to the menu cleanly.
+-  V(stoplightMenuSemaphore);
+-  return;
++	// 08 Feb 2012 : GWA : Please do not change this code. This is so that your
++	// stoplight driver can return to the menu cleanly.
++	V(stoplightMenuSemaphore);
++	return;
+ }
+diff --git a/kern/syscall/file_syscalls.c b/kern/syscall/file_syscalls.c
+new file mode 100644
+index 0000000..391dfe0
+--- /dev/null
++++ b/kern/syscall/file_syscalls.c
+@@ -0,0 +1,517 @@
++/*
++ * System calls for Files
++ * Added by:Pratik
++ */
++#include <types.h>
++#include <file_syscalls.h>
++#include <syscall.h>
++#include <clock.h>
++#include <copyinout.h>
++#include <limits.h>
++#include <kern/types.h>
++#include <kern/errno.h>
++#include <types.h>
++#include <vnode.h>
++#include <uio.h>
++#include <copyinout.h>
++#include <current.h>
++#include <thread.h>
++#include <lib.h>
++#include <vfs.h>
++#include <syscall.h>
++#include <kern/seek.h>
++#include <kern/fcntl.h>
++#include <kern/stat.h>
++#include <addrspace.h>
++
++
++
++
++int
++init_filetable(struct file_handle **fd_table){
++
++	//Assigning null values
++	for(int i=0;i<OPEN_MAX;i++){
++		fd_table[i]=NULL;
++	}
++
++	int result=0;
++	struct vnode* v1;
++	char con1[5]={0};
++
++	// console file : stdin
++
++	strcpy(con1,"con:");
++	result=vfs_open(con1,O_RDONLY,0664,&v1);
++	if(result){
++		return (result);
++	}
++	fd_table[0]=(struct file_handle*)kmalloc(sizeof(struct file_handle));
++	if(fd_table[0] == NULL) {
++		vfs_close(v1);
++		return ENOMEM;
++	}
++	fd_table[0]->vnode=v1;
++	fd_table[0]->flags=O_RDONLY;
++	strcpy(fd_table[0]->filename,con1);
++	fd_table[0]->references=1;
++	fd_table[0]->filelock = lock_create(fd_table[0]->filename);
++	if(fd_table[0]->filelock == NULL) {
++		vfs_close(v1);
++		kfree(fd_table[0]);
++		return ENOMEM;
++	}
++
++	// console file : stdout
++	char con2[5]={0};
++	struct vnode* v2;
++	strcpy(con2,"con:");
++	result=vfs_open(con2,O_WRONLY,0664,&v2);
++
++	if(result){
++		vfs_close(v1);
++		lock_destroy(fd_table[0]->filelock);
++		kfree(fd_table[0]);
++		return (result);
++	}
++	fd_table[1]=(struct file_handle*)kmalloc(sizeof(struct file_handle));
++	if(fd_table[1] == NULL) {
++		vfs_close(v1);
++		vfs_close(v2);
++		lock_destroy(fd_table[0]->filelock);
++		kfree(fd_table[0]);
++		return ENOMEM;
++	}
++	fd_table[1]->vnode=v2;
++	fd_table[1]->flags=O_WRONLY;
++	strcpy(fd_table[1]->filename,con2);
++	fd_table[1]->references=1;
++	fd_table[1]->filelock = lock_create(fd_table[1]->filename);
++	if(fd_table[1]->filelock == NULL) {
++		vfs_close(v1);
++		vfs_close(v2);
++		lock_destroy(fd_table[0]->filelock);
++		kfree(fd_table[0]);
++		kfree(fd_table[1]);
++		return ENOMEM;
++	}
++
++	// console file : stderr
++
++	char con3[5]={0};
++	struct vnode* v3;
++	strcpy(con3,"con:");
++	result=vfs_open(con3,O_WRONLY,0664,&v3);
++	if(result){
++		vfs_close(v1);
++		vfs_close(v2);
++		lock_destroy(fd_table[0]->filelock);
++		lock_destroy(fd_table[1]->filelock);
++		kfree(fd_table[0]);
++		kfree(fd_table[1]);
++		return (result);
++	}
++	fd_table[2]=(struct file_handle*)kmalloc(sizeof(struct file_handle));
++	if(fd_table[2] == NULL) {
++		vfs_close(v1);
++		vfs_close(v2);
++		vfs_close(v3);
++		lock_destroy(fd_table[0]->filelock);
++		lock_destroy(fd_table[1]->filelock);
++		kfree(fd_table[0]);
++		kfree(fd_table[1]);
++		return ENOMEM;
++	}
++	fd_table[2]->vnode=v3;
++	fd_table[2]->flags=O_WRONLY;
++	strcpy(fd_table[2]->filename,con3);
++	fd_table[2]->references=1;
++	fd_table[2]->filelock = lock_create(fd_table[2]->filename);
++	if(fd_table[2]->filelock == NULL) {
++		vfs_close(v1);
++		vfs_close(v2);
++		vfs_close(v3);
++		lock_destroy(fd_table[0]->filelock);
++		lock_destroy(fd_table[1]->filelock);
++		kfree(fd_table[0]);
++		kfree(fd_table[1]);
++		kfree(fd_table[2]);
++		return ENOMEM;
++	}
++
++	return result;
++}
++
++int
++sys_open(char *fname,int flag,int *retval){
++
++	// fileststat to know the size of file for offset
++
++	struct stat filestat;
++
++	int result=0;
++	// Checking for valid filename
++	if(fname==NULL){
++		return (EFAULT);
++	}
++
++
++	if(result){
++		return (result);
++	}
++
++	char dest[PATH_MAX];
++	size_t len;
++
++	//copying to kernel space
++	int copied=copyinstr((const_userptr_t)fname,dest,PATH_MAX,&len);
++
++	if(copied!=0){
++		return (copied);
++	}
++
++	// Path too long
++	if (strlen(dest) > PATH_MAX ) {
++
++		return (ENAMETOOLONG);
++	}
++
++
++	//Checking filetable for an empty node
++
++	int index=0;
++	while(index<OPEN_MAX){
++		if(curthread->fd_table[index]==NULL){
++			curthread->fd_table[index]=(struct file_handle*)kmalloc(sizeof(struct file_handle));
++			if(curthread->fd_table[index] == NULL) {
++				return ENOMEM;
++			}
++			strcpy(curthread->fd_table[index]->filename,dest);
++			curthread->fd_table[index]->references=1;
++			curthread->fd_table[index]->flags=flag;
++			curthread->fd_table[index]->filelock = lock_create(curthread->fd_table[index]->filename);
++			if(curthread->fd_table[index]->filelock == NULL) {
++				kfree(curthread->fd_table[index]);
++				curthread->fd_table[index] = NULL;
++				return ENOMEM;
++			}
++			break;
++		}
++
++		index++;
++	}
++
++	//Too many open files
++
++	if(index >= OPEN_MAX){
++		return (ENFILE);
++	}
++
++	//Opening the file
++	result=vfs_open(fname,flag,0,&curthread->fd_table[index]->vnode);
++	if(result){
++		lock_destroy(curthread->fd_table[index]->filelock);
++		kfree(curthread->fd_table[index]);
++		curthread->fd_table[index] = NULL;
++		return (result);
++	}
++
++	//Assigning the offset
++	if(flag==O_APPEND){
++
++		if((result=VOP_STAT(curthread->fd_table[index]->vnode,&filestat))!=0){
++			lock_destroy(curthread->fd_table[index]->filelock);
++			kfree(curthread->fd_table[index]);
++			curthread->fd_table[index] = NULL;
++			return (result);
++		}
++		else
++			curthread->fd_table[index]->offset=filestat.st_size;
++
++	} else{
++		curthread->fd_table[index]->offset=0;
++	}
++
++	*retval=index;
++	return (0);
++}
++
++
++int
++sys_write(int fd, void *buf, size_t buflen, int *retval) {
++
++	int result;
++	size_t actual_len=0;
++
++
++	char*check;
++	check=kmalloc(sizeof(char));
++	result=copyinstr((const userptr_t)buf,check,NAME_MAX,&actual_len);
++	kfree(check);
++	if(result){
++
++		return result;
++	}
++
++	//	check if fd is a valid file descriptor
++	if (fd < 0 || fd >= OPEN_MAX || (curthread->fd_table[fd] == NULL)) {
++		return EBADF;
++	}
++
++	//	create structs
++
++	struct iovec iov;
++	struct uio u;
++
++	lock_acquire(curthread->fd_table[fd]->filelock);
++
++	//	initialize structs
++	iov.iov_ubase = buf;
++	iov.iov_len = buflen;
++	u.uio_iov = &iov;
++	u.uio_iovcnt = 1;
++	u.uio_offset = curthread->fd_table[fd]->offset;
++	u.uio_resid = buflen;
++	u.uio_segflg = UIO_USERSPACE;
++	u.uio_rw = UIO_WRITE;
++	u.uio_space = curthread->t_addrspace;
++
++	//	write to disk
++	result = VOP_WRITE(curthread->fd_table[fd]->vnode, &u);
++
++	//	set number of bytes written to retval
++	if(result == 0) {
++		curthread->fd_table[fd]->offset = u.uio_offset;
++		*retval = buflen - u.uio_resid;
++	}
++
++	lock_release(curthread->fd_table[fd]->filelock);
++
++	//	return either error code or 0 for success
++	return result;
++}
++
++int
++sys_read(int fd, void *buf, size_t buflen, int *retval) {
++	int result;
++	size_t actual_len=0;
++
++
++	char*check;
++	check=kmalloc(sizeof(char));
++	result=copyinstr((const userptr_t)buf,check,NAME_MAX,&actual_len);
++	kfree(check);
++	if(result){
++
++		return result;
++	}
++
++	//	check if fd is a valid file descriptor
++	if (fd < 0 || fd >= OPEN_MAX || (curthread->fd_table[fd] == NULL)) {
++		return EBADF;
++	}
++	//	create structs
++
++	struct iovec iov;
++	struct uio u;
++
++	lock_acquire(curthread->fd_table[fd]->filelock);
++
++	//	initialize structs
++	iov.iov_ubase = buf;
++	iov.iov_len = buflen;
++	u.uio_iov = &iov;
++	u.uio_iovcnt = 1;
++	u.uio_offset = curthread->fd_table[fd]->offset;
++	u.uio_resid = buflen;
++	u.uio_segflg = UIO_USERSPACE;
++	u.uio_rw = UIO_READ;
++	u.uio_space = curthread->t_addrspace;
++	//	read from disk
++	result = VOP_READ(curthread->fd_table[fd]->vnode, &u);
++	//	set number of bytes read to retval
++	if(result == 0) {
++		curthread->fd_table[fd]->offset = u.uio_offset;
++		*retval = buflen - u.uio_resid;
++	}
++
++	lock_release(curthread->fd_table[fd]->filelock);
++
++	//	return either error code or 0 for success
++	return result;
++}
++
++int
++sys_close(int fd) {
++
++	//Checking for valid index of file descriptor
++
++	if (fd < 0 || fd >= OPEN_MAX || (curthread->fd_table[fd] == NULL)) {
++		return (EBADF);
++	}
++
++	//Checking for referenced files
++	if(curthread->fd_table[fd]->references > 1){
++		curthread->fd_table[fd]->references--;
++		curthread->fd_table[fd] = NULL;
++		return (0);
++	}
++	// If no thread referring to the file descriptor
++	else
++	{
++		lock_destroy(curthread->fd_table[fd]->filelock);
++		vfs_close(curthread->fd_table[fd]->vnode);
++		kfree(curthread->fd_table[fd]);
++		curthread->fd_table[fd] = NULL;
++	}
++
++	return(0);
++}
++
++off_t
++sys_lseek(int fd, off_t pos, int whence, int *retval){
++	int result=0;
++
++
++
++	struct stat filestat;
++	off_t file_size;
++
++	//checking valid file descriptor
++	if(fd < 0 || fd >= OPEN_MAX || curthread->fd_table[fd] == NULL || curthread->fd_table[fd]->filename==NULL){
++		return(EBADF);
++	}
++
++	//check if lseek is called on console
++	if(!strcmp(curthread->fd_table[fd]->filename, "con:")) {
++		return ESPIPE;
++	}
++
++	//checking valid whence
++	if(whence != SEEK_SET && whence != SEEK_CUR && whence != SEEK_END) {
++		return(EINVAL);
++	}
++
++	//checking for valid position
++	if(pos < 0){
++		return(EINVAL);
++	}
++
++	lock_acquire(curthread->fd_table[fd]->filelock);
++
++	if((result=VOP_STAT(curthread->fd_table[fd]->vnode,&filestat))!=0){
++		lock_release(curthread->fd_table[fd]->filelock);
++		return (result);
++	}
++	file_size=filestat.st_size;
++
++	switch(whence) {
++	case SEEK_SET:
++		curthread->fd_table[fd]->offset = pos;
++		break;
++	case SEEK_CUR:
++		curthread->fd_table[fd]->offset += pos;
++		break;
++	case SEEK_END:
++		curthread->fd_table[fd]->offset =file_size + pos;
++		break;
++	}
++
++	result = VOP_TRYSEEK(curthread->fd_table[fd]->vnode,curthread->fd_table[fd]->offset);
++	if(result) {
++		lock_release(curthread->fd_table[fd]->filelock);
++		return (result);
++	}
++
++	*retval = curthread->fd_table[fd]->offset;
++
++	lock_release(curthread->fd_table[fd]->filelock);
++
++	return(0);
++
++}
++
++
++int
++sys_dup2(int oldfd, int newfd,int *retval) {
++
++	//checking for validity of newfd and oldfd
++	if (newfd < 0 || oldfd < 0 || newfd >= OPEN_MAX || oldfd >= OPEN_MAX || (curthread->fd_table[oldfd] == NULL) ) {
++		return (EBADF);
++	}
++
++	if(oldfd != newfd) {
++		// checking newfd
++		if(curthread->fd_table[newfd] != NULL) {
++			sys_close(newfd);
++		}
++
++		//assign oldfd filehandle pointer value to newfd file handle pointer
++		curthread->fd_table[newfd] = curthread->fd_table[oldfd];
++
++		lock_acquire(curthread->fd_table[oldfd]->filelock);
++		//increment references
++		curthread->fd_table[oldfd]->references++;
++		lock_release(curthread->fd_table[oldfd]->filelock);
++	}
++
++	*retval = newfd;
++	return 0;
++}
++
++int
++sys_chdir(const char *pathname){
++
++	int result=0;
++	char dest[PATH_MAX];
++	size_t len;
++
++	//copying pathname from user space to kernel space
++	result=copyinstr((const_userptr_t)pathname,dest,PATH_MAX, &len);
++	if (result) {
++		return result;
++	}
++	result = vfs_chdir(dest);
++
++	if(result) {
++		return (result);
++	}
++	return(0);
++}
++
++int
++sys__getcwd(char *buf, size_t buflen, int *retval){
++
++	struct uio u;
++	struct iovec iov;
++	int result;
++	size_t actual_len=0;
++
++
++	char*check;
++	check=kmalloc(sizeof(char));
++	result=copyinstr((const userptr_t)buf,check,NAME_MAX,&actual_len);
++	kfree(check);
++	if(result){
++
++		return result;
++	}
++	//checking valid buffer
++	if(buf==NULL){
++		return(EFAULT);
++	}
++
++	//initialize iovec and uio for kernel I/O
++	uio_kinit(&iov, &u, buf, buflen, 0, UIO_READ);
++
++	result = vfs_getcwd(&u);
++	if(result) {
++		return (result);
++	}
++
++	buf[sizeof(buf)-1 - u.uio_resid] = 0;
++
++	*retval = strlen(buf);
++	return(0);
++
++}
+diff --git a/kern/syscall/process_syscalls.c b/kern/syscall/process_syscalls.c
+new file mode 100644
+index 0000000..38051f2
+--- /dev/null
++++ b/kern/syscall/process_syscalls.c
+@@ -0,0 +1,359 @@
++/*
++ * process_syscalls.c
++ *
++ *  Created on: Mar 8, 2014
++ *      Author: Pratik
++ */
++
++#include <types.h>
++#include <synch.h>
++#include <file_syscalls.h>
++#include <syscall.h>
++#include <clock.h>
++#include <copyinout.h>
++#include <limits.h>
++#include <kern/types.h>
++#include <kern/errno.h>
++#include <types.h>
++#include <vnode.h>
++#include <uio.h>
++#include <copyinout.h>
++#include <current.h>
++#include <thread.h>
++#include <lib.h>
++#include <vfs.h>
++#include <syscall.h>
++#include <kern/seek.h>
++#include <kern/fcntl.h>
++#include <kern/stat.h>
++#include <kern/wait.h>
++#include <addrspace.h>
++#include <mips/trapframe.h>
++#include <process_syscalls.h>
++
++
++pid_t pid_alloc(void){
++	int i;
++	for(i=1;i<__PROC_MAX;i++){
++		if(process_table[i] == NULL)
++			break;
++	}
++	if(i == __PROC_MAX) {
++		return -1;
++	}
++	pid_counter++;
++	if(pid_counter == __PID_MAX) {
++		return -2;
++	}
++	return i;
++}
++
++int init_process(int ptable_index){
++
++	struct process *p;
++	p = (struct process*)kmalloc(sizeof(struct process));
++	if(p == NULL) {
++		return ENOMEM;
++	}
++	p->exitcode=0;
++	p->exitsem=sem_create("exitsem",0);
++	if(p->exitsem == NULL) {
++		kfree(p);
++		return ENOMEM;
++	}
++	p->exited=false;
++	p->ppid=0;
++	process_table[ptable_index]=p;
++	return 0;
++}
++
++static void destroy_process(int ptable_index) {
++	sem_destroy(process_table[ptable_index]->exitsem);
++	kfree(process_table[ptable_index]);
++	process_table[ptable_index] = NULL;
++}
++
++int sys_getpid(int *retval){
++	*retval = curthread->pid;
++	return 0;
++}
++
++static int getptable_index(pid_t pid) {
++	int i;
++	for(i=0;i<__PROC_MAX;i++) {
++		if(process_table[i] != NULL && process_table[i]->pid == pid) {
++			return i;
++		}
++	}
++	return -1;
++}
++
++pid_t sys_waitpid(pid_t pid, int *status, int options,int *retval){
++
++	//checking for valid pid
++	if(pid < 1 || pid >= __PID_MAX){
++		return ESRCH;
++	}
++	int ptable_index = getptable_index(pid);
++	if(ptable_index == -1 || process_table[ptable_index] == NULL) {
++		return ESRCH;
++	}
++
++	//valid status address check
++	if(status==NULL|| (vaddr_t) status <= 0x40000000 ||(vaddr_t)status % 4 !=0) {
++		return EFAULT;
++	}
++
++	if(curthread->pid!=0 && (vaddr_t) status >= USERSPACETOP){
++		return EFAULT;
++	}
++
++	if(process_table[ptable_index]->ppid != curthread->pid){
++		return ECHILD;
++	}
++
++
++	switch(options){
++	case WNOHANG:
++		if(!process_table[ptable_index]->exited){
++			*retval = 0;
++			return 0;
++		} else {
++			*status =_MKWAIT_EXIT(process_table[ptable_index]->exitcode);
++			destroy_process(ptable_index);
++		}
++		break;
++	case 0:{
++		if(process_table[ptable_index]->exited){
++			*status =_MKWAIT_EXIT(process_table[ptable_index]->exitcode);
++			destroy_process(ptable_index);
++		}else{
++			P(process_table[ptable_index]->exitsem);
++			*status =_MKWAIT_EXIT(process_table[ptable_index]->exitcode);
++			destroy_process(ptable_index);
++		}
++		break;
++	}
++
++	default:
++		return EINVAL;
++	}
++
++	*retval = pid;
++	return 0;
++}
++
++pid_t sys_fork(void (*enter_forked_process)(void *data1, unsigned long data2),
++		void *parenttf, int *retval) {
++
++	P(forkSem);
++
++	struct trapframe *childtf = kmalloc(sizeof(struct trapframe));
++	struct thread *child;
++	int result;
++
++	if(childtf == NULL) {
++		V(forkSem);
++		return ENOMEM;
++	}
++
++	memcpy(childtf, parenttf, sizeof(struct trapframe));
++
++	result = thread_fork(curthread->t_name, enter_forked_process, childtf, (unsigned long)curthread->t_addrspace, &child);
++
++	if(result) {
++		V(forkSem);
++		kfree(childtf);
++	} else {
++		*retval = child->pid;
++	}
++
++	return result;
++}
++
++void sys__exit(int exitcode){
++
++	V(forkSem);
++	V(execvSem);
++	execvSem->sem_count = 2;
++
++	process_table[curthread->ptable_index]->exitcode = exitcode;
++	process_table[curthread->ptable_index]->exited = true;
++	V(process_table[curthread->ptable_index]->exitsem);
++	thread_exit();
++}
++
++
++int
++sys_execv(char *progname, char **argv) {
++
++	P(execvSem);
++
++	int argc = 0;
++	int result = 0;
++	size_t actual_len = 0;
++	vaddr_t entrypoint,stackptr;
++	size_t len;
++	size_t stackoffset = 0;
++	struct vnode *vn = 0;
++	char **kargv;
++	char*check;
++
++
++	if(argv==NULL){
++		V(execvSem);
++		return EFAULT;
++	}
++
++	check=kmalloc(sizeof(char));
++	result=copyinstr((const userptr_t)argv,check,NAME_MAX,&actual_len);
++	kfree(check);
++	if(result){
++		V(execvSem);
++		return result;
++	}
++
++	//copying the file name
++	char dest[PATH_MAX];
++	result=copyinstr((const_userptr_t)progname,dest,PATH_MAX, &actual_len);
++
++	if(result){
++		V(execvSem);
++		return result;
++	}
++
++	//opening the file
++	result = vfs_open(dest, O_RDONLY, 0, &vn);
++
++	if (result) {
++		V(execvSem);
++		return result;
++	}
++
++	kargv=(char **)kmalloc(512 * sizeof(char*));
++
++	int kbufsize=0;
++
++	//copying arguments to kernel buffer
++	if(argv != NULL) {
++		//len=0;
++		int kbuffptr=0;
++
++		while(argv[argc] != NULL)  {
++
++			actual_len = 0;
++			kargv[kbuffptr]=kmalloc(NAME_MAX * sizeof(char));
++			result=copyinstr((const userptr_t)argv[argc],kargv[kbuffptr],NAME_MAX,&actual_len);
++			if(result){
++				V(execvSem);
++				return result;
++			}
++
++			//copying padded arguments of length in multiple of 4
++			argc ++;
++			if(argc >= ARG_MAX) {
++				V(execvSem);
++				return E2BIG;
++			}
++			kbuffptr++;
++		}
++		kargv[kbuffptr]=NULL;
++		kbufsize=kbuffptr;
++
++	}
++
++	// Creating new address space.
++
++	struct addrspace *oldaddr = curthread->t_addrspace;
++	struct addrspace *temp_as=as_create();
++
++	if (temp_as==NULL) {
++		V(execvSem);
++		vfs_close(vn);
++		return ENOMEM;
++	}
++
++	curthread->t_addrspace=temp_as;
++
++	//activating address space
++	as_activate(temp_as);
++
++	result = load_elf(vn,&entrypoint);
++
++	if (result) {
++		V(execvSem);
++		curthread->t_addrspace = oldaddr;
++		vfs_close(vn);
++		as_destroy(temp_as);
++		return result;
++
++	}
++
++	//closing file now
++	vfs_close(vn);
++
++	// Defining the user stack in the address space
++
++	stackptr = 0;
++	result = as_define_stack(temp_as, &stackptr);
++	if (result) {
++		V(execvSem);
++		curthread->t_addrspace = oldaddr;
++		as_destroy(temp_as);
++		return result;
++	}
++
++	as_destroy(oldaddr);
++
++	vaddr_t argvptr[kbufsize];
++
++	//copying arguments from buffer to stack
++
++	for (int i =kbufsize-1; i>=0; i--)
++	{
++		if(kargv[i]!=0){
++			len = strlen(kargv[i])+1;
++
++			if(len>4){
++
++				int l1 = len % 4;
++				if(l1 == 1) {
++					len += 3;
++				}else if(l1==2){
++					len+=2;
++				}else if(l1==3){
++					len+=1;
++				}
++
++			}else
++				len=4;
++
++
++			stackptr -= len;
++			argvptr[i] = stackptr;
++			copyout(kargv[i], (userptr_t) argvptr[i], len);
++		}
++	}
++	argvptr[kbufsize] = 0;
++
++	//freeing kernel buffer
++	for(int i=0;i<kbufsize;i++){
++		kfree(kargv[i]);
++	}
++	kfree(kargv);
++
++	// Create space for the argument pointers
++	stackoffset += sizeof(vaddr_t) * kbufsize*4;
++
++	// Adjust the stack pointer and align it
++	stackptr = stackptr - stackoffset;
++
++	// Copy the argument pointers onto the stack
++	copyout(argvptr, (userptr_t) stackptr, sizeof(vaddr_t) * (argc+1));
++
++	// Entering user mode
++	enter_new_process(argc, (userptr_t) stackptr, stackptr, entrypoint);
++
++	panic("enter_new_process returned\n");
++	return EINVAL;
++}
+diff --git a/kern/syscall/runprogram.c b/kern/syscall/runprogram.c
+index a6f45c8..bff5963 100644
+--- a/kern/syscall/runprogram.c
++++ b/kern/syscall/runprogram.c
+@@ -44,7 +44,9 @@
+ #include <vfs.h>
+ #include <syscall.h>
+ #include <test.h>
+-
++#include <file_syscalls.h>
++#include <process_syscalls.h>
++#include <copyinout.h>
+ /*
+  * Load program "progname" and start running it in usermode.
+  * Does not return except on error.
+@@ -52,12 +54,12 @@
+  * Calls vfs_open on progname and thus may destroy it.
+  */
+ int
+-runprogram(char *progname)
++runprogram(char *progname, char **argc, unsigned long nargs)
+ {
+ 	struct vnode *v;
+ 	vaddr_t entrypoint, stackptr;
+ 	int result;
+-
++	unsigned long arg=nargs;
+ 	/* Open the file. */
+ 	result = vfs_open(progname, O_RDONLY, 0, &v);
+ 	if (result) {
+@@ -77,6 +79,7 @@ runprogram(char *progname)
+ 	/* Activate it. */
+ 	as_activate(curthread->t_addrspace);
+ 
++
+ 	/* Load the executable. */
+ 	result = load_elf(v, &entrypoint);
+ 	if (result) {
+@@ -95,11 +98,50 @@ runprogram(char *progname)
+ 		return result;
+ 	}
+ 
+-	/* Warp to user mode. */
+-	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
+-			  stackptr, entrypoint);
+ 	
+-	/* enter_new_process does not return. */
++	//copying arguments from buffer to stack
++	vaddr_t argvptr[arg];
++	size_t len;
++		size_t stackoffset = 0;
++
++
++	for (int i =arg-1; i>=0; i--)
++	{
++		len = strlen(argc[i])+1;
++
++		if(len>4){
++
++			int l1 = len % 4;
++			if(l1 == 1) {
++				len += 3;
++			}else if(l1==2){
++				len+=2;
++			}else if(l1==3){
++				len+=1;
++			}
++
++		}else
++			len=4;
++
++
++		stackptr -= len;
++		argvptr[i] = stackptr;
++		copyout(argc[i], (userptr_t) argvptr[i], len);
++	}
++	argvptr[arg] = 0;
++
++	// Create space for the argument pointers
++	stackoffset += sizeof(vaddr_t) * arg *4;
++
++	// Adjust the stack pointer and align it
++	stackptr = stackptr - stackoffset;
++
++	// Copy the argument pointers onto the stack
++	copyout(argvptr, (userptr_t) stackptr, sizeof(vaddr_t) * (arg+1));
++
++	// Entering user mode
++	enter_new_process(arg, (userptr_t) stackptr, stackptr, entrypoint);
++
+ 	panic("enter_new_process returned\n");
+ 	return EINVAL;
+ }
+diff --git a/kern/test/tt3.c b/kern/test/tt3.c
+index 399b9c9..01fd9ad 100644
+--- a/kern/test/tt3.c
++++ b/kern/test/tt3.c
+@@ -56,6 +56,7 @@
+ #define COMPUTE_ITERS         10
+ 
+ #define NWAITCHANS 12
++
+ static struct wchan *waitchans[NWAITCHANS];  /* N distinct wait channels */
+ 
+ static volatile int wakerdone;
+diff --git a/kern/thread/synch.c b/kern/thread/synch.c
+index 9a7468c..b3dea58 100644
+--- a/kern/thread/synch.c
++++ b/kern/thread/synch.c
+@@ -150,59 +150,104 @@ V(struct semaphore *sem)
+ struct lock *
+ lock_create(const char *name)
+ {
+-        struct lock *lock;
++        struct lock *mylock;
+ 
+-        lock = kmalloc(sizeof(struct lock));
+-        if (lock == NULL) {
++        mylock = kmalloc(sizeof(struct lock));
++        if (mylock == NULL) {
+                 return NULL;
+         }
+ 
+-        lock->lk_name = kstrdup(name);
+-        if (lock->lk_name == NULL) {
+-                kfree(lock);
++        mylock->lk_name = kstrdup(name);
++        if (mylock->lk_name == NULL) {
++                kfree(mylock);
+                 return NULL;
+         }
+         
+         // add stuff here as needed
+-        
+-        return lock;
++
++        mylock->lk_wchan = wchan_create(mylock->lk_name);
++        if (mylock->lk_wchan == NULL) {
++        	kfree(mylock->lk_name);
++        	kfree(mylock);
++        	return NULL;
++        }
++        spinlock_init(&mylock->lk_spinlock);
++        mylock->owner_thread = NULL;
++
++        //end of added stuff
++
++        return mylock;
+ }
+ 
+ void
+-lock_destroy(struct lock *lock)
++lock_destroy(struct lock *mylock)
+ {
+-        KASSERT(lock != NULL);
++        KASSERT(mylock != NULL);
+ 
+         // add stuff here as needed
+         
+-        kfree(lock->lk_name);
+-        kfree(lock);
++        spinlock_cleanup(&mylock->lk_spinlock);
++        wchan_destroy(mylock->lk_wchan);
++
++        //end of added stuff
++
++        kfree(mylock->lk_name);
++        kfree(mylock);
+ }
+ 
+ void
+-lock_acquire(struct lock *lock)
++lock_acquire(struct lock *mylock)
+ {
+-        // Write this
++//	Write this
+ 
+-        (void)lock;  // suppress warning until code gets written
++	if(curthread == mylock->owner_thread) {
++		return;
++	}
++	spinlock_acquire(&mylock->lk_spinlock);
++	while (mylock->owner_thread != NULL) {
++		wchan_lock(mylock->lk_wchan);
++		spinlock_release(&mylock->lk_spinlock);
++		wchan_sleep(mylock->lk_wchan);
++		spinlock_acquire(&mylock->lk_spinlock);
++	}
++	mylock->owner_thread = curthread;
++	spinlock_release(&mylock->lk_spinlock);
++
++//	end of added stuff
++
++//	(void)mylock;  // suppress warning until code gets written
+ }
+ 
+ void
+-lock_release(struct lock *lock)
++lock_release(struct lock *mylock)
+ {
+-        // Write this
++//	Write this
++
++	if(curthread != mylock->owner_thread) {
++		return;
++	}
++	spinlock_acquire(&mylock->lk_spinlock);
++	mylock->owner_thread = NULL;
++	wchan_wakeone(mylock->lk_wchan);
++	spinlock_release(&mylock->lk_spinlock);
+ 
+-        (void)lock;  // suppress warning until code gets written
++	//end of added stuff
++
++//	(void)mylock;  // suppress warning until code gets written
+ }
+ 
+ bool
+-lock_do_i_hold(struct lock *lock)
++lock_do_i_hold(struct lock *mylock)
+ {
+-        // Write this
++//	Write this
++
++	return curthread == mylock->owner_thread;
+ 
+-        (void)lock;  // suppress warning until code gets written
++//	end of added stuff
+ 
+-        return true; // dummy until code gets written
++//	(void)mylock;  // suppress warning until code gets written
++
++//	return true; // dummy until code gets written
+ }
+ 
+ ////////////////////////////////////////////////////////////
+@@ -213,55 +258,156 @@ lock_do_i_hold(struct lock *lock)
+ struct cv *
+ cv_create(const char *name)
+ {
+-        struct cv *cv;
++        struct cv *mycv;
+ 
+-        cv = kmalloc(sizeof(struct cv));
+-        if (cv == NULL) {
++        mycv = kmalloc(sizeof(struct cv));
++        if (mycv == NULL) {
+                 return NULL;
+         }
+ 
+-        cv->cv_name = kstrdup(name);
+-        if (cv->cv_name==NULL) {
+-                kfree(cv);
++        mycv->cv_name = kstrdup(name);
++        if (mycv->cv_name==NULL) {
++                kfree(mycv);
+                 return NULL;
+         }
+         
+         // add stuff here as needed
+         
+-        return cv;
++        spinlock_init(&mycv->cv_spinlock);
++        mycv->cv_wchan = wchan_create(mycv->cv_name);
++        if (mycv->cv_wchan == NULL) {
++        	kfree(mycv->cv_name);
++        	kfree(mycv);
++        	return NULL;
++        }
++
++        //end of added stuff
++
++        return mycv;
+ }
+ 
+ void
+-cv_destroy(struct cv *cv)
++cv_destroy(struct cv *mycv)
+ {
+-        KASSERT(cv != NULL);
++        KASSERT(mycv != NULL);
+ 
+         // add stuff here as needed
+-        
+-        kfree(cv->cv_name);
+-        kfree(cv);
++
++        wchan_destroy(mycv->cv_wchan);
++
++        //end of added stuff
++        kfree(mycv->cv_name);
++        kfree(mycv);
+ }
+ 
+ void
+-cv_wait(struct cv *cv, struct lock *lock)
++cv_wait(struct cv *mycv, struct lock *mylock)
+ {
+-        // Write this
+-        (void)cv;    // suppress warning until code gets written
+-        (void)lock;  // suppress warning until code gets written
++	// Write this
++
++	spinlock_acquire(&mycv->cv_spinlock);
++	lock_release(mylock);
++	wchan_lock(mycv->cv_wchan);
++	spinlock_release(&mycv->cv_spinlock);
++	wchan_sleep(mycv->cv_wchan);
++	lock_acquire(mylock);
++
++	//end of added stuff
++//	(void)mycv;    // suppress warning until code gets written
++//	(void)mylock;  // suppress warning until code gets written
+ }
+ 
+ void
+-cv_signal(struct cv *cv, struct lock *lock)
++cv_signal(struct cv *mycv, struct lock *mylock)
+ {
+-        // Write this
+-	(void)cv;    // suppress warning until code gets written
+-	(void)lock;  // suppress warning until code gets written
++	// Write this
++
++	wchan_wakeone(mycv->cv_wchan);
++
++	//end of added stuff
++//	(void)mycv;    // suppress warning until code gets written
++	(void)mylock;  // suppress warning until code gets written
+ }
+ 
+ void
+-cv_broadcast(struct cv *cv, struct lock *lock)
++cv_broadcast(struct cv *mycv, struct lock *mylock)
+ {
+ 	// Write this
+-	(void)cv;    // suppress warning until code gets written
+-	(void)lock;  // suppress warning until code gets written
++
++	wchan_wakeall(mycv->cv_wchan);
++
++	//end of added stuff
++//	(void)mycv;    // suppress warning until code gets written
++	(void)mylock;  // suppress warning until code gets written
++}
++struct rwlock * rwlock_create(const char *name){
++
++	struct rwlock *myrwlock;
++
++	myrwlock=kmalloc(sizeof(struct rwlock));
++
++	if(myrwlock==NULL){
++		return NULL;
++	}
++
++	myrwlock->rwlock_name = kstrdup(name);
++
++	if(myrwlock->rwlock_name==NULL){
++		kfree(myrwlock);
++		return NULL;
++	}
++
++	myrwlock->lk_read=lock_create("read");
++	myrwlock->lk_write=lock_create("write");
++	myrwlock->max_readers=30;
++	myrwlock->sem_resource=sem_create("resource",myrwlock->max_readers);
++
++
++	if(myrwlock->sem_resource==NULL){
++		kfree(myrwlock);
++		return NULL;
++	}
++
++	return myrwlock;
++}
++
++void rwlock_destroy(struct rwlock *myrwlock){
++	lock_destroy(myrwlock->lk_read);
++	lock_destroy(myrwlock->lk_write);
++	sem_destroy(myrwlock->sem_resource);
++	kfree(myrwlock->rwlock_name);
++	kfree(myrwlock);
++}
++
++void rwlock_acquire_read(struct rwlock *myrwlock){
++
++	lock_acquire(myrwlock->lk_read);
++
++	P(myrwlock->sem_resource);
++
++	lock_release(myrwlock->lk_read);
++
++}
++
++void rwlock_release_read(struct rwlock *myrwlock){
++
++	V(myrwlock->sem_resource);
++}
++
++void rwlock_acquire_write(struct rwlock *myrwlock){
++
++	lock_acquire(myrwlock->lk_write);
++
++	for(int i=0;i<myrwlock->max_readers;i++){
++		P(myrwlock->sem_resource);
++	}
++
++	lock_release(myrwlock->lk_write);
++
++}
++
++void rwlock_release_write(struct rwlock *myrwlock){
++	for(int i=0;i<myrwlock->max_readers;i++){
++			V(myrwlock->sem_resource);
++		}
+ }
+diff --git a/kern/thread/thread.c b/kern/thread/thread.c
+index e7235e3..c633b8c 100644
+--- a/kern/thread/thread.c
++++ b/kern/thread/thread.c
+@@ -47,11 +47,12 @@
+ #include <addrspace.h>
+ #include <mainbus.h>
+ #include <vnode.h>
+-
++#include <vfs.h>
++#include <file_syscalls.h>
++#include <process_syscalls.h>
+ #include "opt-synchprobs.h"
+ #include "opt-defaultscheduler.h"
+ 
+-
+ /* Magic number used as a guard value on kernel thread stacks. */
+ #define THREAD_STACK_MAGIC 0xbaadf00d
+ 
+@@ -153,8 +154,18 @@ thread_create(const char *name)
+ 	thread->t_cwd = NULL;
+ 
+ 	/* If you add to struct thread, be sure to initialize here */
++	/*
++	 * For FILESYSTEM
++	 * Added By: Pratik
++	 */
++
++	// Initialize file table
++
++// Initialize process
+ 
+-	return thread;
++	thread->pid=0;
++	thread->ptable_index = 0;
++    return thread;
+ }
+ 
+ /*
+@@ -176,7 +187,7 @@ cpu_create(unsigned hardware_number)
+ 	if (c == NULL) {
+ 		panic("cpu_create: Out of memory\n");
+ 	}
+-	
++
+ 	c->c_self = c;
+ 	c->c_hardware_number = hardware_number;
+ 
+@@ -382,6 +393,17 @@ thread_bootstrap(void)
+ 	curcpu->c_curthread = curthread;
+ 
+ 	/* Done */
++	/*
++	 * Initializing process table
++	 */
++
++	for(int i=0;i<__PROC_MAX;i++){
++		process_table[i]=NULL;
++	}
++	pid_counter = 0;
++	forkSem = sem_create("forkSem", 8);
++	execvSem = sem_create("execvSem", 2);
++
+ }
+ 
+ /*
+@@ -419,7 +441,7 @@ thread_start_cpus(void)
+ 
+ 	cpu_startup_sem = sem_create("cpu_hatch", 0);
+ 	mainbus_start_cpus();
+-	
++
+ 	for (i=0; i<cpuarray_num(&allcpus) - 1; i++) {
+ 		P(cpu_startup_sem);
+ 	}
+@@ -478,9 +500,9 @@ thread_make_runnable(struct thread *target, bool already_have_lock)
+  */
+ int
+ thread_fork(const char *name,
+-	    void (*entrypoint)(void *data1, unsigned long data2),
+-	    void *data1, unsigned long data2,
+-	    struct thread **ret)
++		void (*entrypoint)(void *data1, unsigned long data2),
++		void *data1, unsigned long data2,
++		struct thread **ret)
+ {
+ 	struct thread *newthread;
+ 
+@@ -497,6 +519,26 @@ thread_fork(const char *name,
+ 	}
+ 	thread_checkstack_init(newthread);
+ 
++//	Initialize a process
++	int result = pid_alloc();
++	if(result < 0) {
++		kfree(newthread->t_stack);
++		thread_destroy(newthread);
++		return result==-1?ENPROC:EMPROC;
++	}
++	newthread->pid = pid_counter;
++	newthread->ptable_index = result;
++
++	result = init_process(newthread->ptable_index);
++	if(result) {
++		kfree(newthread->t_stack);
++		thread_destroy(newthread);
++		return result;
++	}
++	process_table[newthread->ptable_index]->self=newthread;
++	process_table[newthread->ptable_index]->ppid = curthread->pid;
++	process_table[newthread->ptable_index]->pid = newthread->pid;
++
+ 	/*
+ 	 * Now we clone various fields from the parent thread.
+ 	 */
+@@ -505,7 +547,44 @@ thread_fork(const char *name,
+ 	newthread->t_cpu = curthread->t_cpu;
+ 
+ 	/* VM fields */
+-	/* do not clone address space -- let caller decide on that */
++
++	/* Copy address space and file table from parent process to child process
++	 * if thread_fork is not called by kernel i.e. (curthread->pid != 0)
++	 */
++	if(curthread->pid != 0) {
++
++		result = as_copy((struct addrspace *)curthread->t_addrspace, &newthread->t_addrspace);
++		if(result) {
++			sem_destroy(process_table[newthread->ptable_index]->exitsem);
++			kfree(process_table[newthread->ptable_index]);
++			process_table[newthread->ptable_index] = NULL;
++			kfree(newthread->t_stack);
++			thread_destroy(newthread);
++			return result;
++		}
++
++		//copy parent file table to child
++		int i;
++		for(i=0;i<OPEN_MAX;i++) {
++			if(curthread->fd_table[i] != NULL) {
++				curthread->fd_table[i]->references++;
++			}
++		}
++		memcpy(newthread->fd_table, curthread->fd_table, sizeof(curthread->fd_table));
++
++	} else {
++		/*Only initialize the child file table if thread_fork is called by kernel*/
++		result = init_filetable(newthread->fd_table);
++		if(result){
++			sem_destroy(process_table[newthread->ptable_index]->exitsem);
++			kfree(process_table[newthread->ptable_index]);
++			process_table[newthread->ptable_index] = NULL;
++			kfree(newthread->t_stack);
++			thread_destroy(newthread);
++			return result;
++		}
++	}
++
+ 
+ 	/* VFS fields */
+ 	if (curthread->t_cwd != NULL) {
+@@ -535,7 +614,6 @@ thread_fork(const char *name,
+ 	if (ret != NULL) {
+ 		*ret = newthread;
+ 	}
+-
+ 	return 0;
+ }
+ 
+@@ -587,13 +665,13 @@ thread_switch(threadstate_t newstate, struct wchan *wc)
+ 
+ 	/* Put the thread in the right place. */
+ 	switch (newstate) {
+-	    case S_RUN:
++	case S_RUN:
+ 		panic("Illegal S_RUN in thread_switch\n");
+ 		break;
+-	    case S_READY:
++	case S_READY:
+ 		thread_make_runnable(cur, true /*have lock*/);
+ 		break;
+-	    case S_SLEEP:
++	case S_SLEEP:
+ 		cur->t_wchan_name = wc->wc_name;
+ 		/*
+ 		 * Add the thread to the list in the wait channel, and
+@@ -611,7 +689,7 @@ thread_switch(threadstate_t newstate, struct wchan *wc)
+ 		threadlist_addtail(&wc->wc_threads, cur);
+ 		wchan_unlock(wc);
+ 		break;
+-	    case S_ZOMBIE:
++	case S_ZOMBIE:
+ 		cur->t_wchan_name = "ZOMBIE";
+ 		threadlist_addtail(&curcpu->c_zombies, cur);
+ 		break;
+@@ -736,7 +814,7 @@ thread_switch(threadstate_t newstate, struct wchan *wc)
+  */
+ void
+ thread_startup(void (*entrypoint)(void *data1, unsigned long data2),
+-	       void *data1, unsigned long data2)
++		void *data1, unsigned long data2)
+ {
+ 	struct thread *cur;
+ 
+@@ -800,6 +878,22 @@ thread_exit(void)
+ 		cur->t_cwd = NULL;
+ 	}
+ 
++//	Free all file handles if this thread is the only one with reference to them
++//	else only decrement the references counter
++
++	for(int i=0;i<OPEN_MAX;i++){
++		if(cur->fd_table[i] != NULL){
++			if(cur->fd_table[i]->references <= 1){
++				lock_destroy(cur->fd_table[i]->filelock);
++				vfs_close(cur->fd_table[i]->vnode);
++				kfree(cur->fd_table[i]);
++			} else {
++				cur->fd_table[i]->references--;
++			}
++		}
++	}
++
++
+ 	/* VM fields */
+ 	if (cur->t_addrspace) {
+ 		/*
+@@ -818,7 +912,7 @@ thread_exit(void)
+ 	thread_checkstack(cur);
+ 
+ 	/* Interrupts off on this processor */
+-        splhigh();
++	splhigh();
+ 	thread_switch(S_ZOMBIE, NULL);
+ 	panic("The zombie walks!\n");
+ }
+@@ -845,14 +939,14 @@ thread_yield(void)
+ void
+ schedule(void)
+ {
+-  // 28 Feb 2012 : GWA : Leave the default scheduler alone!
++	// 28 Feb 2012 : GWA : Leave the default scheduler alone!
+ }
+ #else
+ void
+ schedule(void)
+ {
+-  // 28 Feb 2012 : GWA : Implement your scheduler that prioritizes
+-  // "interactive" threads here.
++	// 28 Feb 2012 : GWA : Implement your scheduler that prioritizes
++	// "interactive" threads here.
+ }
+ #endif
+ 
+@@ -947,8 +1041,8 @@ thread_consider_migration(void)
+ 			t->t_cpu = c;
+ 			threadlist_addtail(&c->c_runqueue, t);
+ 			DEBUG(DB_THREADS,
+-			      "Migrated thread %s: cpu %u -> %u",
+-			      t->t_name, curcpu->c_number, c->c_number);
++					"Migrated thread %s: cpu %u -> %u",
++					t->t_name, curcpu->c_number, c->c_number);
+ 			to_send--;
+ 			if (c->c_isidle) {
+ 				/*
+@@ -1162,6 +1256,21 @@ ipi_broadcast(int code)
+ }
+ 
+ void
++tlb_broadcast()
++{
++	unsigned i;
++	struct cpu *c;
++
++	for (i=0; i < cpuarray_num(&allcpus); i++) {
++		c = cpuarray_get(&allcpus, i);
++		if (c != curcpu->c_self) {
++			c->c_numshootdown = TLBSHOOTDOWN_ALL;
++			ipi_send(c, 3);
++		}
++	}
++}
++
++void
+ ipi_tlbshootdown(struct cpu *target, const struct tlbshootdown *mapping)
+ {
+ 	int n;
+@@ -1201,7 +1310,7 @@ interprocessor_interrupt(void)
+ 		spinlock_acquire(&curcpu->c_runqueue_lock);
+ 		if (!curcpu->c_isidle) {
+ 			kprintf("cpu%d: offline: warning: not idle\n",
+-				curcpu->c_number);
++					curcpu->c_number);
+ 		}
+ 		spinlock_release(&curcpu->c_runqueue_lock);
+ 		kprintf("cpu%d: offline.\n", curcpu->c_number);
+diff --git a/kern/vm/addrspace.c b/kern/vm/addrspace.c
+index 302fa7b..2c4a9a0 100644
+--- a/kern/vm/addrspace.c
++++ b/kern/vm/addrspace.c
+@@ -30,133 +30,435 @@
+ #include <types.h>
+ #include <kern/errno.h>
+ #include <lib.h>
++#include <spl.h>
++#include <spinlock.h>
++#include <thread.h>
++#include <current.h>
++#include <mips/tlb.h>
+ #include <addrspace.h>
+ #include <vm.h>
++#include <coremap.h>
+ 
+ /*
+- * Note! If OPT_DUMBVM is set, as is the case until you start the VM
+- * assignment, this file is not compiled or linked or in any way
+- * used. The cheesy hack versions in dumbvm.c are used instead.
++ * Non-Dumb MIPS-only "VM system" that is intended to only be just barely
++ * enough to struggle off the ground. You should replace all of this
++ * code while doing the VM assignment. In fact, starting in that
++ * assignment, this file is not included in your kernel!
+  */
+ 
+-struct addrspace *
+-as_create(void)
++void
++vm_tlbshootdown_all(void)
+ {
+-	struct addrspace *as;
++	/* Disable interrupts on this CPU while frobbing the TLB. */
++	int spl = splhigh();
+ 
+-	as = kmalloc(sizeof(struct addrspace));
+-	if (as == NULL) {
+-		return NULL;
++	for (int i=0; i<NUM_TLB; i++) {
++		tlb_write(TLBHI_INVALID(i), TLBLO_INVALID(), i);
+ 	}
+ 
+-	/*
+-	 * Initialize as needed.
+-	 */
++	splx(spl);
+ 
+-	return as;
++}
++
++void
++vm_tlbshootdown(const struct tlbshootdown *ts)
++{
++	(void)ts;
++	panic("non-dumbvm tried to do tlb shootdown?!\n");
++}
++
++static
++void
++as_zero_region(paddr_t paddr, unsigned npages)
++{
++	bzero((void *)PADDR_TO_KVADDR(paddr), npages * PAGE_SIZE);
+ }
+ 
+ int
+-as_copy(struct addrspace *old, struct addrspace **ret)
++vm_fault(int faulttype, vaddr_t faultaddress)
+ {
+-	struct addrspace *newas;
++	faultaddress &= PAGE_FRAME;
+ 
+-	newas = as_create();
+-	if (newas==NULL) {
+-		return ENOMEM;
++	struct addrspace *as = curthread->t_addrspace;
++	paddr_t paddr;
++	struct page_table *temp = &as->start;
++	struct page_entry *match = NULL;
++
++	if(faultaddress >= USERSTACK || faultaddress < as->vstart) {
++		return EFAULT;
+ 	}
+ 
+-	/*
+-	 * Write this.
+-	 */
++	while(temp != NULL) {
++		for(int i=0;i<PTABLE_ARRAY_SIZE;i++) {
++			if(temp->table[i].page_paddr != 0 && temp->table[i].page_vaddr == faultaddress) {
++				match = &temp->table[i];
++				break;
++			} else if(temp->table[i].page_paddr == 0) {
++				break;
++			}
++		}
++		if(match != NULL) {
++			break;
++		}
++		temp = temp->nextPageTable;
++	}
++
++	switch (faulttype) {
++	case VM_FAULT_READONLY:
++		return EFAULT;
++		break;
++	case VM_FAULT_READ:
++		if(match != NULL) {
++			paddr = match->page_paddr;
++		} else {
++			return EFAULT;
++		}
++		break;
++	case VM_FAULT_WRITE:
++		if(match != NULL) {
++			if(match->isWrite == 0) {
++//				spinlock_acquire(&coremap_slock);
++//				paddr = getpaddr(1);
++//				if(paddr == 0) {
++//					spinlock_release(&coremap_slock);
++//					return ENOMEM;
++//				}
++//				addtocoremap(paddr, 1, 0);
++//				spinlock_release(&coremap_slock);
++//				match->isWrite = 1;
++//				match->isShared = 0;
++//				memcpy((void*)PADDR_TO_KVADDR(paddr), (void*)PADDR_TO_KVADDR(match->page_paddr), PAGE_SIZE);
++//				match->page_paddr = paddr;
++				return EFAULT;
++			} else {
++				paddr = match->page_paddr;
++			}
++		} else if(faultaddress >= STACK_BASE && faultaddress < USERSTACK) {
++			spinlock_acquire(&coremap_slock);
++			paddr = getpaddr(1);
++			if(paddr == 0) {
++				spinlock_release(&coremap_slock);
++				return ENOMEM;
++			}
++			addtocoremap(paddr, 1, 0);
++			spinlock_release(&coremap_slock);
++			addPageEntry(faultaddress, paddr, 1, 1, 0);
++			as_zero_region(paddr, 1);
++		} else {
++			return EFAULT;
++		}
++		break;
++	default:
++		return EINVAL;
++	}
++
++	/* Disable interrupts on this CPU while frobbing the TLB. */
++	int spl = splhigh();
++	uint32_t ehi, elo;
++
++	for (int i=0; i<NUM_TLB; i++) {
++		tlb_read(&ehi, &elo, i);
++		if (elo & TLBLO_VALID) {
++			continue;
++		}
++		ehi = faultaddress;
++//		if(match->isWrite) {
++			elo = paddr | TLBLO_DIRTY | TLBLO_VALID;
++//		} else {
++//			elo = (paddr & (~TLBLO_DIRTY)) | TLBLO_VALID;
++//		}
++		tlb_write(ehi, elo, i);
++		splx(spl);
++		return 0;
++	}
++	ehi = faultaddress;
++//	if(match->isWrite) {
++		elo = paddr | TLBLO_DIRTY | TLBLO_VALID;
++//	} else {
++//		elo = (paddr & (~TLBLO_DIRTY)) | TLBLO_VALID;
++//	}
++	tlb_random(ehi, elo);
++
++	splx(spl);
+ 
+-	(void)old;
+-	
+-	*ret = newas;
+ 	return 0;
+ }
+ 
++struct addrspace *
++as_create(void)
++{
++	struct addrspace *as = kmalloc(sizeof(struct addrspace));
++	if (as==NULL) {
++		return NULL;
++	}
++	as->vbreakbase = 0;
++	as->vbreaktop = 0;
++	as->heapNPages = 0;
++	as->vstart = 0;
++	as->start.entry_count = 0;
++	as->start.nextPageTable = NULL;
++	as->codeNPages = 0;
++	as->dataNPages = 0;
++	as->end = &as->start;
++	int i;
++	for(i=0;i<PTABLE_ARRAY_SIZE;i++) {
++		as->start.table[i].page_paddr = 0;
++//		as->start.table[i].isShared = 0;
++	}
++	return as;
++}
++
+ void
+ as_destroy(struct addrspace *as)
+ {
+-	/*
+-	 * Clean up as needed.
+-	 */
+-	
++	struct page_table *temp = &as->start;
++	while(temp != NULL) {
++		for(int i=0;i<PTABLE_ARRAY_SIZE;i++) {
++			if(temp->table[i].page_paddr != 0) {
++				page_free(temp->table[i].page_paddr);
++			} else if(temp->table[i].page_paddr == 0) {
++				break;
++			}
++		}
++		temp = temp->nextPageTable;
++	}
++	temp = as->start.nextPageTable;
++	struct page_table *temp1;
++	while(temp != NULL) {
++		temp1 = temp->nextPageTable;
++		kfree(temp);
++		temp = temp1;
++	}
+ 	kfree(as);
+ }
+ 
+ void
+ as_activate(struct addrspace *as)
+ {
+-	/*
+-	 * Write this.
+-	 */
++	int i, spl;
+ 
+-	(void)as;  // suppress warning until code gets written
++	(void)as;
++
++	/* Disable interrupts on this CPU while frobbing the TLB. */
++	spl = splhigh();
++
++	for (i=0; i<NUM_TLB; i++) {
++		tlb_write(TLBHI_INVALID(i), TLBLO_INVALID(), i);
++	}
++	tlb_broadcast();
++
++	splx(spl);
+ }
+ 
+-/*
+- * Set up a segment at virtual address VADDR of size MEMSIZE. The
+- * segment in memory extends from VADDR up to (but not including)
+- * VADDR+MEMSIZE.
+- *
+- * The READABLE, WRITEABLE, and EXECUTABLE flags are set if read,
+- * write, or execute permission should be set on the segment. At the
+- * moment, these are ignored. When you write the VM system, you may
+- * want to implement them.
+- */
+ int
+ as_define_region(struct addrspace *as, vaddr_t vaddr, size_t sz,
+ 		 int readable, int writeable, int executable)
+ {
+-	/*
+-	 * Write this.
+-	 */
++	size_t npages;
++
++	/* Align the region. First, the base... */
++	sz += vaddr & ~(vaddr_t)PAGE_FRAME;
++	vaddr &= PAGE_FRAME;
++
++	/* ...and now the length. */
++	sz = (sz + PAGE_SIZE - 1) & PAGE_FRAME;
++
++	npages = sz / PAGE_SIZE;
+ 
+-	(void)as;
+-	(void)vaddr;
+-	(void)sz;
+ 	(void)readable;
+ 	(void)writeable;
+ 	(void)executable;
++
++	if(as->codeNPages == 0) {
++		as->vstart = vaddr;
++		as->codeNPages = npages;
++		as->vbreakbase = npages * PAGE_SIZE + vaddr;
++		as->vbreaktop = as->vbreakbase;
++		return 0;
++	}
++
++	if(as->dataNPages == 0) {
++		as->dataNPages = npages;
++		as->vbreakbase = npages * PAGE_SIZE + vaddr;
++		as->vbreaktop = as->vbreakbase;
++		return 0;
++	}
++
++	/*
++	 * Support for more than two regions is not available.
++	 */
++	kprintf("myvm: Warning: too many regions\n");
+ 	return EUNIMP;
++
+ }
+ 
+ int
+ as_prepare_load(struct addrspace *as)
+ {
+-	/*
+-	 * Write this.
+-	 */
+-
+-	(void)as;
++	paddr_t paddr;
++	for(unsigned int i=0;i<as->codeNPages;i++) {
++		spinlock_acquire(&coremap_slock);
++		paddr = getpaddr(1);
++		if(paddr == 0) {
++			spinlock_release(&coremap_slock);
++			as_destroy(as);
++			return ENOMEM;
++		}
++		addtocoremap(paddr, 1, 0);
++		spinlock_release(&coremap_slock);
++		addPageEntry(as->vstart + (PAGE_SIZE * i), paddr, 1, 1, 0);
++		as_zero_region(paddr, 1);
++	}
++	vaddr_t vdataStart = as->vbreakbase - (as->dataNPages * PAGE_SIZE);
++	for(unsigned int i=0;i<as->dataNPages;i++) {
++		spinlock_acquire(&coremap_slock);
++		paddr = getpaddr(1);
++		if(paddr == 0) {
++			spinlock_release(&coremap_slock);
++			as_destroy(as);
++			return ENOMEM;
++		}
++		addtocoremap(paddr, 1, 0);
++		spinlock_release(&coremap_slock);
++		addPageEntry(vdataStart + (PAGE_SIZE * i), paddr, 1, 1, 0);
++		as_zero_region(paddr, 1);
++	}
+ 	return 0;
+ }
+ 
+ int
+ as_complete_load(struct addrspace *as)
+ {
+-	/*
+-	 * Write this.
+-	 */
++	struct page_table *temp = &as->start;
++	vaddr_t codeTop = as->vstart + (PAGE_SIZE * as->codeNPages);
++	vaddr_t dataTop = as->vbreakbase;
++	while(temp != NULL) {
++		for(int i=0;i<PTABLE_ARRAY_SIZE;i++) {
++			if(temp->table[i].page_paddr == 0) {
++				break;
++			}
++			if(temp->table[i].page_vaddr < codeTop) {
++				temp->table[i].isExe = 1;
++				temp->table[i].isRead = 1;
++				temp->table[i].isWrite = 0;
++			} else if(temp->table[i].page_vaddr < dataTop) {
++				temp->table[i].isExe = 0;
++				temp->table[i].isRead = 1;
++				temp->table[i].isWrite = 1;
++			}
++		}
++		temp = temp->nextPageTable;
++	}
++	return 0;
++}
+ 
++int
++as_define_stack(struct addrspace *as, vaddr_t *stackptr)
++{
+ 	(void)as;
++	*stackptr = USERSTACK;
+ 	return 0;
+ }
+ 
+ int
+-as_define_stack(struct addrspace *as, vaddr_t *stackptr)
++as_copy(struct addrspace *old, struct addrspace **ret)
+ {
+-	/*
+-	 * Write this.
+-	 */
++	struct addrspace *new;
+ 
+-	(void)as;
++	new = as_create();
++	if (new==NULL) {
++		return ENOMEM;
++	}
++	struct page_table *oldtemp = &old->start;
++	struct page_table *newtemp = &new->start;
++	paddr_t paddr;
++	while(oldtemp != NULL) {
++		if(oldtemp != &old->start) {
++			struct page_table *temp = (struct page_table*)kmalloc(sizeof(struct page_table));
++			temp->nextPageTable = NULL;
++			newtemp->nextPageTable = temp;
++			newtemp = temp;
++		}
++		newtemp->entry_count = oldtemp->entry_count;
++		for(int i=0;i<PTABLE_ARRAY_SIZE;i++) {
++			newtemp->table[i].page_vaddr = oldtemp->table[i].page_vaddr;
++			newtemp->table[i].isExe = oldtemp->table[i].isExe;
++			newtemp->table[i].isRead = oldtemp->table[i].isRead;
++			newtemp->table[i].isWrite = oldtemp->table[i].isWrite;
++//			newtemp->table[i].isShared = 1;
++//			newtemp->table[i].page_paddr = oldtemp->table[i].page_paddr;
++			if(oldtemp->table[i].page_paddr != 0) {
++				spinlock_acquire(&coremap_slock);
++				paddr = getpaddr(1);
++				if(paddr == 0) {
++					spinlock_release(&coremap_slock);
++					as_destroy(new);
++					return ENOMEM;
++				}
++				addtocoremap(paddr,1,0);
++				newtemp->table[i].page_paddr = paddr;
++				spinlock_release(&coremap_slock);
++				memcpy((void *)PADDR_TO_KVADDR(newtemp->table[i].page_paddr), (void *)PADDR_TO_KVADDR(oldtemp->table[i].page_paddr), PAGE_SIZE);
++			} else {
++				newtemp->table[i].page_paddr = 0;
++			}
++		}
++		oldtemp = oldtemp->nextPageTable;
++	}
+ 
+-	/* Initial user-level stack pointer */
+-	*stackptr = USERSTACK;
+-	
++	*ret = new;
+ 	return 0;
+ }
+ 
++void addPageEntry(vaddr_t vaddr, paddr_t paddr, int isRead, int isWrite, int isExe) {
++	struct page_table *temp = &curthread->t_addrspace->start;
++	while(temp != NULL) {
++		int i;
++		if(temp->entry_count != PTABLE_ARRAY_SIZE) {
++			for(i=0;i<PTABLE_ARRAY_SIZE;i++) {
++				if(temp->table[i].page_paddr == 0) {
++					temp->table[i].isExe = isExe;
++					temp->table[i].isRead = isRead;
++					temp->table[i].isWrite = isWrite;
++					temp->table[i].page_paddr = paddr;
++					temp->table[i].page_vaddr = vaddr;
++					temp->entry_count++;
++					return;
++				}
++			}
++		}
++		temp = temp->nextPageTable;
++	}
++	temp = (struct page_table*)kmalloc(sizeof(struct page_table));
++	temp->nextPageTable = NULL;
++	temp->table[0].isExe = isExe;
++	temp->table[0].isRead = isRead;
++	temp->table[0].isWrite = isWrite;
++	temp->table[0].page_paddr = paddr;
++	temp->table[0].page_vaddr = vaddr;
++	temp->entry_count = 1;
++	int i;
++	for(i=1;i<PTABLE_ARRAY_SIZE;i++) {
++		temp->table[i].page_paddr = 0;
++	}
++	curthread->t_addrspace->end->nextPageTable = temp;
++	curthread->t_addrspace->end = temp;
++}
++
++paddr_t removePageEntry(vaddr_t vaddr) {
++	struct page_table *temp = &curthread->t_addrspace->start;
++	paddr_t paddr;
++	while(temp != NULL) {
++		int i;
++		for(i=0;i<PTABLE_ARRAY_SIZE;i++) {
++			if(temp->table[i].page_vaddr == vaddr) {
++				paddr = temp->table[i].page_paddr;
++				temp->table[i].page_paddr = 0;
++				temp->entry_count--;
++				return paddr;
++			}
++		}
++		temp = temp->nextPageTable;
++	}
++	return 0;
++}
+diff --git a/kern/vm/coremap.c b/kern/vm/coremap.c
+new file mode 100644
+index 0000000..6f1f149
+--- /dev/null
++++ b/kern/vm/coremap.c
+@@ -0,0 +1,134 @@
++/*
++ * coremap.c
++ *
++ *  Created on: May 1, 2014
++ *      Author: trinity
++ */
++/*
++ * Coremap
++ * Added by: Pratik
++ */
++
++#include <types.h>
++#include <file_syscalls.h>
++#include <lib.h>
++#include <machine/vm.h>
++#include <coremap.h>
++#include <addrspace.h>
++
++static struct cm_entry *coremap;
++static unsigned int cm_entries;
++static unsigned int cm_lastentry;
++
++//first physical address after coremap boot
++static paddr_t freespace;
++
++//function for bootstraping the coremap
++
++paddr_t
++coremap_bootstrap (void)
++{
++
++	unsigned total_pages;
++	unsigned coremap_size;
++	paddr_t first;
++	paddr_t last;
++
++	//Getting the ram size
++	ram_getsize(&first, &last);
++
++	//Getting total pages
++	total_pages = (last - first) / PAGE_SIZE;
++
++	coremap_size = total_pages * sizeof(struct cm_entry);
++
++	//Aligning coremap size with the page size
++	coremap_size = roundUp(coremap_size, PAGE_SIZE);
++
++	// stealing pages for coremap
++	coremap = (struct cm_entry *) PADDR_TO_KVADDR(first);
++	first += coremap_size;
++	first = first % PAGE_SIZE != 0 ? (first & PAGE_FRAME) + PAGE_SIZE : first;
++
++	//setting coremap base address
++	freespace=first;
++
++	// Calulating the total coremap entries
++	cm_entries = (last / PAGE_SIZE) - (first / PAGE_SIZE);
++
++	// initialize coremap entries
++	init_coremap();
++
++	cm_lastentry=0;
++
++	return freespace;
++}
++
++
++//function to initialize a coremap
++void init_coremap(void){
++	for (unsigned int i = 0; i < cm_entries; i++) {
++		coremap[i].is_allocated = 0;
++		coremap[i].is_kern_page = 0;
++		coremap[i].chunk_cnt = 0;
++	}
++}
++
++// function to roundup a number in the multiple of page_size
++unsigned roundUp(unsigned numToRound, int multiple)
++{
++	return (numToRound + multiple - 1) & ~(multiple - 1);
++}
++
++// Funtion to ad entry to the coremap
++void addtocoremap(paddr_t paddr, int npages, bool iskern){
++	int index=getindex(paddr);
++	for(int i=0;i<npages;i++){
++		coremap[index].chunk_cnt = npages;
++		coremap[index].is_allocated = 1;
++		coremap[index].is_kern_page = iskern;
++		index++;
++	}
++}
++
++
++//function to remove entry from coremap
++
++void removefromcoremap(paddr_t paddr){
++
++	int index = getindex(paddr);
++
++	for(int i=0;i<coremap[index].chunk_cnt;i++){
++		coremap[index].chunk_cnt = 0;
++		coremap[index].is_allocated = 0;
++		coremap[index].is_kern_page = 0;
++		index++;
++	}
++
++}
++
++//funtion to get the index of a coremap entry
++int getindex(paddr_t paddr){
++	return (paddr-freespace) / PAGE_SIZE;
++}
++
++// get the physical address by iterating the coremap
++paddr_t getpaddr(int npages){
++	int count=0;
++	for(unsigned int i=0;i<cm_entries;i++){
++		if(coremap[i].is_allocated==0){
++			count++;
++			if(count==npages){
++				return indextopaddr(i-count+1);
++			}
++		}else{
++			count=0;
++		}
++	}
++	return 0;
++}
++
++//convert the coremap index to physical address
++paddr_t indextopaddr(int index){
++	return (index * PAGE_SIZE)+freespace;
++}
+diff --git a/kern/vm/vm.c b/kern/vm/vm.c
+new file mode 100644
+index 0000000..eb3762b
+--- /dev/null
++++ b/kern/vm/vm.c
+@@ -0,0 +1,125 @@
++/*
++ *vm.c
++ *Added by:Pratik
++ * Created on: May 2, 2014
++ *      Author: trinity
++ */
++
++#include <types.h>
++#include <kern/errno.h>
++#include <lib.h>
++#include <spl.h>
++#include <spinlock.h>
++#include <thread.h>
++#include <current.h>
++#include <mips/tlb.h>
++#include <addrspace.h>
++#include <vm.h>
++#include <coremap.h>
++#include <mainbus.h>
++
++
++struct spinlock coremap_slock = SPINLOCK_INITIALIZER;
++
++static paddr_t firstpaddr;
++
++void
++vm_bootstrap(void)
++{
++    //coremap bootstrap
++    firstpaddr=coremap_bootstrap();
++    //lastpaddr=mainbus_ramsize();
++
++}
++
++
++vaddr_t
++alloc_kpages(int npages){
++
++    paddr_t paddr;
++    spinlock_acquire(&coremap_slock);
++    paddr=getpaddr(npages);
++    if(paddr==0 || npages == 0){
++    	spinlock_release(&coremap_slock);
++        return 0;
++    }
++    addtocoremap(paddr,npages,1);
++    spinlock_release(&coremap_slock);
++    return PADDR_TO_KVADDR(paddr);
++}
++
++int
++page_alloc(int npages, vaddr_t vaddr){
++	paddr_t paddr;
++	for(int i=0;i<npages;i++){
++		spinlock_acquire(&coremap_slock);
++		paddr=getpaddr(1);
++		if(paddr==0){
++			spinlock_release(&coremap_slock);
++			return 1;
++		}
++		addtocoremap(paddr,1,0);
++		spinlock_release(&coremap_slock);
++		addPageEntry(vaddr,paddr, 1, 1, 0);
++		curthread->t_addrspace->heapNPages++;
++		vaddr += PAGE_SIZE;
++	}
++	return 0;
++}
++
++
++
++void
++page_free(paddr_t paddr)
++{
++    spinlock_acquire(&coremap_slock);
++    removefromcoremap(paddr);
++    spinlock_release(&coremap_slock);
++}
++
++void
++free_kpages(vaddr_t vaddr)
++{
++    spinlock_acquire(&coremap_slock);
++    removefromcoremap(KVADDR_TO_PADDR(vaddr));
++    spinlock_release(&coremap_slock);
++}
++
++int
++sys_sbrk(intptr_t amount,int *retval){
++
++    vaddr_t vaddr = curthread->t_addrspace->vbreaktop;
++    curthread->t_addrspace->vbreaktop += amount;
++
++    if(curthread->t_addrspace->vbreaktop >= (STACK_BASE - 4096)) {
++    	return ENOMEM;
++    }
++
++    if(curthread->t_addrspace->vbreaktop < curthread->t_addrspace->vbreakbase) {
++    	curthread->t_addrspace->vbreaktop = vaddr;
++    	return EINVAL;
++    }
++
++    if((curthread->t_addrspace->vbreaktop - curthread->t_addrspace->vbreakbase) >= (curthread->t_addrspace->heapNPages * PAGE_SIZE)) {
++        int npages = curthread->t_addrspace->vbreaktop - (curthread->t_addrspace->vbreakbase + (curthread->t_addrspace->heapNPages * PAGE_SIZE));
++        int mod=npages % PAGE_SIZE;
++        if(mod == 0){
++            npages = npages / PAGE_SIZE;
++        }else{
++            npages = (npages / PAGE_SIZE) + 1;
++        }
++
++        vaddr_t temp;
++        if((vaddr % PAGE_SIZE) == 0) {
++        	temp = vaddr;
++        } else {
++        	temp =  (vaddr & PAGE_FRAME) + PAGE_SIZE;
++        }
++    	if(page_alloc(npages, temp)){
++    		return ENOMEM;
++    	}
++    }
++
++    *retval = vaddr;
++    return 0;
++}
+diff --git a/user/bin/true/true.c b/user/bin/true/true.c
+index 9665dc7..b276950 100644
+--- a/user/bin/true/true.c
++++ b/user/bin/true/true.c
+@@ -27,8 +27,11 @@
+  * SUCH DAMAGE.
+  */
+ 
+-#include <unistd.h>
++#include <stdio.h>
+ #include <stdlib.h>
++#include <fcntl.h>
++#include <unistd.h>
++
+ 
+ /*
+  * true - succeed.
+@@ -38,5 +41,19 @@ int
+ main()
+ {
+ 	/* Just exit with success. */
+-	exit(0);
++//	static char readbuf[41];
++
++static char writebuf[40] = "Twiddle dee dee, Twiddle dum dum.......\n";
++int r=open("test.txt",O_RDWR|O_CREAT);
++ write(r, writebuf, 40);
++printf("done");
++close(r);
++//r=open("test.txt",O_RDWR);
++//read(r, readbuf, 40);
++//write(r, readbuf, 40);
++//close(r);;
++//int a=0;
++//a++;
++//close(r);;
++exit(0);
+ }
