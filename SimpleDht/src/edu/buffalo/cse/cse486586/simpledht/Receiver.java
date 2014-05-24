@@ -7,6 +7,11 @@ import java.net.Socket;
 
 import android.content.Context;
 
+/**
+ *  
+ * @author pratik
+ */
+
 public class Receiver extends Thread {
 	int port;
 	ServerSocket server;
@@ -46,10 +51,11 @@ public class Receiver extends Thread {
 			}
 		} 
 		catch (IOException e) {
-			// TODO Auto-generated catch block
+
 			e.printStackTrace();
+
 		} catch (ClassNotFoundException e) {
-			// TODO Auto-generated catch block
+
 			e.printStackTrace();
 		}
 

@@ -3,11 +3,13 @@ package edu.buffalo.cse.cse486586.simpledht;
 import java.io.Serializable;
 import java.util.TreeMap;
 
+/**
+ *  
+ * @author pratik
+ */
+
 public class Message implements Serializable{
 	
-	/**
-	 * 
-	 */
 	private static final long serialVersionUID = 1L;
 	public String key;
 	public String hashKey;

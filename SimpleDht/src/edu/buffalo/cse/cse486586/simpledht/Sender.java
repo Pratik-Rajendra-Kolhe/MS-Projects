@@ -5,6 +5,11 @@ import java.io.ObjectOutputStream;
 import java.net.Socket;
 import java.net.UnknownHostException;
 
+/**
+ *  
+ * @author pratik
+ */
+
 public class Sender extends Thread{
 
 	Message msg;

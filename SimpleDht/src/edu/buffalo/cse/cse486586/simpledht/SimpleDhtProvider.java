@@ -17,6 +17,11 @@ import android.net.Uri;
 import android.telephony.TelephonyManager;
 
 
+/**
+ *  
+ * @author pratik
+ */
+
 public class SimpleDhtProvider extends ContentProvider {
 
 	DBhelper dbHelper ;
@@ -269,7 +274,7 @@ public class SimpleDhtProvider extends ContentProvider {
 
 
 		} catch (NoSuchAlgorithmException e) {
-			// TODO Auto-generated catch block
+
 			e.printStackTrace();
 		}
 
@@ -398,7 +403,6 @@ public class SimpleDhtProvider extends ContentProvider {
 
 	@Override
 	public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
-		// TODO Auto-generated method stub
 		return 0;
 	}
 
